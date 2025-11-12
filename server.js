@@ -21,6 +21,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '')));
 
 
+// Disable caching for API responses so judge UI always gets fresh data
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 // Database connection
 
 const db = mysql.createPool({
@@ -936,21 +944,34 @@ app.get('/participant-scores/:participantId/:competitionId', (req, res) => {
 
 app.get('/detailed-scores/:competitionId', (req, res) => {
     const { competitionId } = req.params;
+    
+    // Get the LATEST detailed scores by getting the most recent updated_at per judge-participant
     const sql = `
         SELECT ds.*, cc.criteria_name, cc.percentage, cc.max_score, 
-               j.judge_name, p.participant_name, p.performance_title
+               j.judge_name, p.participant_name, p.performance_title, p.contestant_number
         FROM detailed_scores ds
         JOIN competition_criteria cc ON ds.criteria_id = cc.criteria_id
         JOIN judges j ON ds.judge_id = j.judge_id
         JOIN participants p ON ds.participant_id = p.participant_id
         WHERE ds.competition_id = ?
+        AND ds.created_at IN (
+            SELECT MAX(created_at) 
+            FROM detailed_scores 
+            WHERE judge_id = ds.judge_id 
+            AND participant_id = ds.participant_id 
+            AND competition_id = ds.competition_id
+            GROUP BY judge_id, participant_id
+        )
         ORDER BY p.participant_name, cc.order_number, j.judge_name
     `;
+    
     db.query(sql, [competitionId], (err, result) => {
         if (err) {
             console.error('Error fetching detailed scores:', err);
             return res.status(500).json({ error: 'Error fetching detailed scores' });
         }
+        
+        console.log(`✅ Fetched ${result.length} detailed score records`);
         res.json(result);
     });
 });
@@ -1474,7 +1495,6 @@ app.get('/pageant-leaderboard/:competitionId', (req, res) => {
 });
 
 
-
 app.get('/overall-scores/:competitionId', (req, res) => {
     const { competitionId } = req.params;
     
@@ -1490,7 +1510,7 @@ app.get('/overall-scores/:competitionId', (req, res) => {
         const isPageant = compResult[0].is_pageant;
         
         if (isPageant) {
-            // FOR PAGEANTS: Use the SAME calculation as /pageant-leaderboard
+            // FOR PAGEANTS: Use the segment averaging logic
             console.log('📊 Fetching PAGEANT scores with segment averaging for competition:', competitionId);
             
             const sql = `
@@ -1504,7 +1524,8 @@ app.get('/overall-scores/:competitionId', (req, res) => {
                     ps.day_number,
                     os.judge_id,
                     j.judge_name,
-                    os.total_score
+                    os.total_score,
+                    os.updated_at
                 FROM participants p
                 JOIN overall_scores os ON p.participant_id = os.participant_id
                 JOIN judges j ON os.judge_id = j.judge_id
@@ -1523,7 +1544,6 @@ app.get('/overall-scores/:competitionId', (req, res) => {
                     return res.json([]);
                 }
                 
-                // STEP 1: Group by participant and segment
                 const participantMap = {};
                 
                 result.forEach(row => {
@@ -1541,7 +1561,6 @@ app.get('/overall-scores/:competitionId', (req, res) => {
                     const participant = participantMap[row.participant_id];
                     participant.all_judges.add(row.judge_id);
                     
-                    // Group by segment
                     if (!participant.segments[row.segment_id]) {
                         participant.segments[row.segment_id] = {
                             segment_name: row.segment_name,
@@ -1556,18 +1575,15 @@ app.get('/overall-scores/:competitionId', (req, res) => {
                     });
                 });
                 
-                // STEP 2: Calculate SEGMENT AVERAGES first, then OVERALL AVERAGE
                 const finalScores = Object.values(participantMap).map(participant => {
                     const segmentAverages = [];
                     
-                    // For each segment, calculate average of judge scores
                     Object.values(participant.segments).forEach(segment => {
                         const sum = segment.scores.reduce((acc, s) => acc + s.score, 0);
                         const average = sum / segment.scores.length;
                         segmentAverages.push(average);
                     });
                     
-                    // Overall average is the average of segment averages
                     const overallAverage = segmentAverages.reduce((acc, avg) => acc + avg, 0) / segmentAverages.length;
                     
                     return {
@@ -1582,21 +1598,33 @@ app.get('/overall-scores/:competitionId', (req, res) => {
                     };
                 });
                 
-                console.log('✅ Pageant scores calculated with CORRECT segment averaging');
+                console.log('✅ Pageant scores calculated');
                 res.json(finalScores);
             });
             
         } else {
-            // FOR REGULAR COMPETITIONS: Standard query
+            // FOR REGULAR COMPETITIONS: Get LATEST scores only (fixed to use updated_at)
             console.log('📊 Fetching REGULAR competition scores for competition:', competitionId);
             
             const sql = `
-                SELECT os.*, j.judge_name, p.participant_name, p.performance_title
+                SELECT 
+                    os.score_id,
+                    os.judge_id,
+                    os.participant_id,
+                    os.competition_id,
+                    os.total_score,
+                    os.general_comments,
+                    os.updated_at,
+                    os.created_at,
+                    j.judge_name, 
+                    p.participant_name, 
+                    p.contestant_number,
+                    p.performance_title
                 FROM overall_scores os
                 JOIN judges j ON os.judge_id = j.judge_id
                 JOIN participants p ON os.participant_id = p.participant_id
                 WHERE os.competition_id = ? AND os.segment_id IS NULL
-                ORDER BY p.participant_name, os.total_score DESC
+                ORDER BY p.participant_name, os.updated_at DESC
             `;
             
             db.query(sql, [competitionId], (err, result) => {
@@ -1604,6 +1632,8 @@ app.get('/overall-scores/:competitionId', (req, res) => {
                     console.error('❌ Error fetching regular scores:', err);
                     return res.status(500).json({ error: 'Error fetching scores' });
                 }
+                
+                console.log(`✅ Found ${result.length} regular scores`);
                 res.json(result);
             });
         }
@@ -1772,94 +1802,93 @@ app.post('/submit-detailed-scores', (req, res) => {
     });
     
     if (!judge_id || !participant_id || !competition_id || !scores || scores.length === 0) {
-        console.error('❌ Missing required fields:', { judge_id, participant_id, competition_id, has_scores: !!scores });
+        console.error('❌ Missing required fields');
         return res.status(400).json({ error: 'Required fields missing' });
     }
 
-    // Delete old detailed scores
-    db.query('DELETE FROM detailed_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id IS NULL', 
-        [judge_id, participant_id, competition_id], (err) => {
-        if (err) {
-            console.error('❌ Error deleting old scores:', err);
+    // STEP 1: Delete ALL existing scores for this combination
+    const deleteDetailedSql = 'DELETE FROM detailed_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id IS NULL';
+    const deleteOverallSql = 'DELETE FROM overall_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id IS NULL';
+    
+    db.query(deleteDetailedSql, [judge_id, participant_id, competition_id], (err1) => {
+        if (err1) {
+            console.error('❌ Error deleting old detailed scores:', err1);
             return res.status(500).json({ error: 'Error updating scores' });
         }
-
-        let totalScore = 0;
         
-        const insertPromises = scores.map(score => {
-            const weightedScore = (score.score * score.percentage) / 100;
-            totalScore += weightedScore;
+        db.query(deleteOverallSql, [judge_id, participant_id, competition_id], (err2) => {
+            if (err2) {
+                console.error('❌ Error deleting old overall scores:', err2);
+                return res.status(500).json({ error: 'Error updating scores' });
+            }
             
-            return new Promise((resolve, reject) => {
-                const sql = `
-                    INSERT INTO detailed_scores 
-                    (judge_id, participant_id, competition_id, segment_id, criteria_id, score, weighted_score, comments) 
-                    VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
-                `;
-                db.query(sql, [
-                    judge_id, participant_id, competition_id, 
-                    score.criteria_id, score.score, weightedScore, score.comments || null
-                ], (err, result) => {
-                    if (err) {
-                        console.error('❌ Error inserting detailed score:', err);
-                        reject(err);
-                    } else {
-                        console.log('✅ Detailed score inserted, ID:', result.insertId);
-                        resolve(result);
-                    }
-                });
-            });
-        });
+            console.log('✅ Old scores deleted successfully');
 
-        Promise.all(insertPromises)
-            .then(() => {
-                console.log('✅ All detailed scores inserted. Total:', totalScore.toFixed(2));
+            let totalScore = 0;
+            
+            // STEP 2: Insert new detailed scores
+            const insertPromises = scores.map(score => {
+                const weightedScore = (score.score * score.percentage) / 100;
+                totalScore += weightedScore;
                 
-                // CRITICAL: Insert into overall_scores with segment_id = NULL
-                const overallSql = `
-                    INSERT INTO overall_scores 
-                    (judge_id, participant_id, competition_id, segment_id, total_score, general_comments, is_locked, locked_at)
-                    VALUES (?, ?, ?, NULL, ?, ?, FALSE, NULL)
-                    ON DUPLICATE KEY UPDATE 
-                    total_score = VALUES(total_score), 
-                    general_comments = VALUES(general_comments),
-                    is_locked = FALSE,
-                    locked_at = NULL,
-                    updated_at = CURRENT_TIMESTAMP
-                `;
-                
-                db.query(overallSql, [judge_id, participant_id, competition_id, totalScore, general_comments || null], (err, result) => {
-                    if (err) {
-                        console.error('❌ Error saving overall score:', err);
-                        return res.status(500).json({ 
-                            success: false,
-                            error: 'Error saving overall score: ' + err.message 
-                        });
-                    }
-                    
-                    console.log('✅ Overall score saved successfully:', {
-                        judge_id,
-                        participant_id,
-                        competition_id,
-                        total_score: totalScore.toFixed(2),
-                        affected_rows: result.affectedRows
+                return new Promise((resolve, reject) => {
+                    const sql = `
+                        INSERT INTO detailed_scores 
+                        (judge_id, participant_id, competition_id, segment_id, criteria_id, score, weighted_score, comments) 
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                    `;
+                    db.query(sql, [
+                        judge_id, participant_id, competition_id, 
+                        score.criteria_id, score.score, weightedScore, score.comments || null
+                    ], (err, result) => {
+                        if (err) {
+                            console.error('❌ Error inserting detailed score:', err);
+                            reject(err);
+                        } else {
+                            resolve(result);
+                        }
                     });
-                    
-                    res.json({ 
-                        success: true, 
-                        message: 'Scores submitted successfully!',
-                        total_score: totalScore,
-                        should_start_countdown: true
-                    });
-                });
-            })
-            .catch(err => {
-                console.error('❌ Error inserting detailed scores:', err);
-                res.status(500).json({ 
-                    success: false,
-                    error: 'Error saving detailed scores: ' + err.message 
                 });
             });
+
+            Promise.all(insertPromises)
+                .then(() => {
+                    console.log('✅ All detailed scores inserted. Total:', totalScore.toFixed(2));
+                    
+                    // STEP 3: Insert new overall_scores (NOT upsert - we deleted old ones)
+                    const overallSql = `
+                        INSERT INTO overall_scores 
+                        (judge_id, participant_id, competition_id, segment_id, total_score, general_comments, is_locked, locked_at)
+                        VALUES (?, ?, ?, NULL, ?, ?, FALSE, NULL)
+                    `;
+                    
+                    db.query(overallSql, [judge_id, participant_id, competition_id, totalScore, general_comments || null], (err, result) => {
+                        if (err) {
+                            console.error('❌ Error saving overall score:', err);
+                            return res.status(500).json({ 
+                                success: false,
+                                error: 'Error saving overall score: ' + err.message 
+                            });
+                        }
+                        
+                        console.log('✅ Overall score saved successfully');
+                        
+                        res.json({ 
+                            success: true, 
+                            message: 'Scores submitted successfully!',
+                            total_score: totalScore,
+                            should_start_countdown: true
+                        });
+                    });
+                })
+                .catch(err => {
+                    console.error('❌ Error inserting detailed scores:', err);
+                    res.status(500).json({ 
+                        success: false,
+                        error: 'Error saving detailed scores: ' + err.message 
+                    });
+                });
+        });
     });
 });
 
@@ -1870,83 +1899,88 @@ console.log('✅ FIXED: /submit-detailed-scores endpoint now properly saves with
 // PAGEANT: submit per-segment scores (judge)
 // ==========================================
 app.post('/submit-segment-scores', (req, res) => {
-  const { judge_id, participant_id, segment_id, scores, general_comments, total_score } = req.body;
+    const { judge_id, participant_id, segment_id, scores, general_comments, total_score } = req.body;
 
-  if (!judge_id || !participant_id || !segment_id || !Array.isArray(scores) || scores.length === 0) {
-    return res.status(400).json({ success: false, error: 'Missing required fields' });
-  }
-
-  // Step 1: remove any previous scores for this judge+participant+segment (safe re-submit)
-  const deleteDetailsSql = `
-    DELETE FROM pageant_segment_scores
-    WHERE judge_id = ? AND participant_id = ? AND segment_id = ?
-  `;
-  db.query(deleteDetailsSql, [judge_id, participant_id, segment_id], (delErr) => {
-    if (delErr) {
-      console.error('❌ Error clearing old pageant_segment_scores:', delErr);
-      return res.status(500).json({ success: false, error: 'Error updating segment scores' });
+    if (!judge_id || !participant_id || !segment_id || !Array.isArray(scores) || scores.length === 0) {
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
-    // Step 2: insert per-criteria rows
-    const insertDetailSql = `
-      INSERT INTO pageant_segment_scores
-        (judge_id, participant_id, segment_id, criteria_id, score, weighted_score, comments)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `;
+    console.log('📥 Submitting PAGEANT segment scores:', { judge_id, participant_id, segment_id });
 
-    let computedTotal = 0;
-    const inserts = scores.map(s => {
-      const sc = parseFloat(s.score) || 0;
-      const w  = parseFloat(s.weighted_score) || 0;
-      computedTotal += w;
-      return new Promise((resolve, reject) => {
-        db.query(
-          insertDetailSql,
-          [judge_id, participant_id, segment_id, s.criteria_id, sc, w, s.comments || null],
-          (err) => err ? reject(err) : resolve()
-        );
-      });
-    });
-
-    Promise.all(inserts).then(() => {
-      // Step 3: upsert the segment total in overall_scores (with segment_id!)
-      const upsertOverallSql = `
-        INSERT INTO overall_scores (judge_id, participant_id, competition_id, segment_id, total_score, is_locked, locked_at)
-        SELECT ?, ?, ps.competition_id, ?, ?, FALSE, NULL
-        FROM pageant_segments ps
-        WHERE ps.segment_id = ?
-        ON DUPLICATE KEY UPDATE total_score = VALUES(total_score), updated_at = NOW()
-      `;
-
-      const total = (typeof total_score === 'number') ? total_score : computedTotal;
-
-      db.query(
-        upsertOverallSql,
-        [judge_id, participant_id, segment_id, total, segment_id],
-        (ovErr) => {
-          if (ovErr) {
-            console.error('❌ Error upserting overall_scores (pageant):', ovErr);
-            return res.status(500).json({ success: false, error: 'Error saving segment total' });
-          }
-
-          // Optional: store a copy of judge’s general comments into detailed table as a note row,
-          // or keep it separate if you have another place. Skipped here.
-
-          // Tell the frontend it may start the short auto-lock countdown
-          res.json({
-            success: true,
-            message: 'Segment scores saved',
-            should_start_countdown: true
-          });
+    // STEP 1: Delete ALL existing scores for this combination
+    const deleteDetailsSql = `DELETE FROM pageant_segment_scores WHERE judge_id = ? AND participant_id = ? AND segment_id = ?`;
+    const deleteOverallSql = `DELETE FROM overall_scores WHERE judge_id = ? AND participant_id = ? AND segment_id = ?`;
+    
+    db.query(deleteDetailsSql, [judge_id, participant_id, segment_id], (err1) => {
+        if (err1) {
+            console.error('❌ Error deleting old pageant segment scores:', err1);
+            return res.status(500).json({ success: false, error: 'Error updating segment scores' });
         }
-      );
-    }).catch((insErr) => {
-      console.error('❌ Error inserting pageant segment scores:', insErr);
-      res.status(500).json({ success: false, error: 'Error inserting segment scores' });
-    });
-  });
-});
 
+        db.query(deleteOverallSql, [judge_id, participant_id, segment_id], (err2) => {
+            if (err2) {
+                console.error('❌ Error deleting old overall scores:', err2);
+                return res.status(500).json({ success: false, error: 'Error updating overall scores' });
+            }
+
+            console.log('✅ Old segment scores deleted');
+
+            // STEP 2: Insert new detailed segment scores
+            const insertDetailSql = `
+                INSERT INTO pageant_segment_scores
+                (judge_id, participant_id, segment_id, criteria_id, score, weighted_score, comments)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `;
+
+            let computedTotal = 0;
+            const inserts = scores.map(s => {
+                const sc = parseFloat(s.score) || 0;
+                const w  = parseFloat(s.weighted_score) || 0;
+                computedTotal += w;
+                return new Promise((resolve, reject) => {
+                    db.query(
+                        insertDetailSql,
+                        [judge_id, participant_id, segment_id, s.criteria_id, sc, w, s.comments || null],
+                        (err) => err ? reject(err) : resolve()
+                    );
+                });
+            });
+
+            Promise.all(inserts).then(() => {
+                // STEP 3: Insert new overall score for segment (NOT upsert)
+                const insertOverallSql = `
+                    INSERT INTO overall_scores (judge_id, participant_id, competition_id, segment_id, total_score, is_locked, locked_at)
+                    SELECT ?, ?, ps.competition_id, ?, ?, FALSE, NULL
+                    FROM pageant_segments ps
+                    WHERE ps.segment_id = ?
+                `;
+
+                const total = (typeof total_score === 'number') ? total_score : computedTotal;
+
+                db.query(
+                    insertOverallSql,
+                    [judge_id, participant_id, segment_id, total, segment_id],
+                    (err) => {
+                        if (err) {
+                            console.error('❌ Error inserting overall score:', err);
+                            return res.status(500).json({ success: false, error: 'Error saving segment total' });
+                        }
+
+                        console.log('✅ Segment score saved successfully');
+                        res.json({
+                            success: true,
+                            message: 'Segment scores saved',
+                            should_start_countdown: true
+                        });
+                    }
+                );
+            }).catch((err) => {
+                console.error('❌ Error inserting pageant segment scores:', err);
+                res.status(500).json({ success: false, error: 'Error inserting segment scores' });
+            });
+        });
+    });
+});
 
 
 // ==========================================
