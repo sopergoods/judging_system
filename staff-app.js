@@ -1,1168 +1,1336 @@
-// Enhanced Staff Dashboard JavaScript with Pageant Support and New Features
+// =====================================================
+// STAFF DASHBOARD - CLEAN VERSION
+// Maroon & White Theme | Bug-Free | Professional
+// =====================================================
 
-// Check authentication on page load
+const API_URL = 'https://mseufci-judgingsystem.up.railway.app';
+let currentUser = null;
+let allCompetitions = [];
+let allParticipants = [];
+let statusUpdateInterval = null;
+
+// =====================================================
+// INITIALIZATION & AUTHENTICATION
+// =====================================================
+
 document.addEventListener('DOMContentLoaded', function() {
-    checkAuthentication();
+    initializeStaffDashboard();
 });
 
-// Check if user is authenticated and has staff role
+function initializeStaffDashboard() {
+    checkAuthentication();
+    initializeConnectionMonitor();
+    setupGlobalErrorHandling();
+}
+
 function checkAuthentication() {
     const user = JSON.parse(sessionStorage.getItem('user') || 'null');
+    
     if (!user || (user.role !== 'staff' && user.role !== 'admin')) {
         window.location.href = 'login.html';
         return;
     }
     
-    // Update header to show staff info
-    updateHeader(user);
+    currentUser = user;
+    updateUserInterface(user);
 }
 
-// Update header with user info and logout button
-function updateHeader(user) {
-    const userInfo = document.getElementById('userInfo');
-    if (userInfo) {
-        userInfo.textContent = `Welcome, ${user.username}`;
+function updateUserInterface(user) {
+    const userInfoElement = document.getElementById('userInfo');
+    if (userInfoElement) {
+        userInfoElement.textContent = `Welcome, ${user.full_name || user.username}`;
     }
 }
 
-// Logout function
 function logout() {
-    sessionStorage.removeItem('user');
-    window.location.href = 'login.html';
+    if (confirm('Are you sure you want to logout?')) {
+        sessionStorage.removeItem('user');
+        clearAllIntervals();
+        window.location.href = 'login.html';
+    }
 }
 
-// Enhanced Dashboard
+// =====================================================
+// DASHBOARD HOME
+// =====================================================${createDashboardCard('Scoring Progress', 'Real-time scoring status', 'showScoringOverview()')}
+
 function showDashboard() {
-    document.getElementById("content").innerHTML = `
+    clearAllIntervals();
+    
+    const content = `
         <div style="text-align: center; padding: 40px;">
-            <h2> WELCOME!</h2>
-           <h2> Staff Dashboard</h2>
-           
+            <h2>Staff Dashboard</h2>
+            <p style="color: #666; margin-bottom: 30px;">Manage competitions, participants, and view reports</p>
             
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 30px;">
-                <div class="dashboard-card">
-                    <h3> Event Types</h3>
-                    <p>View available competition categories</p>
-                    <button onclick="showEventTypes()" class="card-button">View Event Types</button>
-                </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px;">
+                ${createDashboardCard('Event Types', 'View available competition categories', 'showEventTypes()')}
+                ${createDashboardCard('Competitions', 'View active competitions', 'showViewCompetitions()')}
+                ${createDashboardCard('Add Participant', 'Register new participants', 'showAddParticipantForm()')}
+                ${createDashboardCard('Manage Participants', 'View and edit all participants', 'showViewParticipants()')}
+                ${createDashboardCard('Judges', 'View judge assignments', 'showViewJudges()')}
+                ${createDashboardCard('Reports', 'Generate analytics reports', 'showReports()')}
                 
-                <div class="dashboard-card">
-                    <h3> Competitions</h3>
-                    <p>View active competitions and details</p>
-                    <button onclick="showViewCompetitions()" class="card-button">View Competitions</button>
-                </div>
-                
-                <div class="dashboard-card">
-                    <h3> Participants</h3>
-                    <p>Register and manage all participants</p>
-                    <button onclick="showAddParticipantForm()" class="card-button">Add Participant</button>
-                    <button onclick="showViewParticipants()" class="card-button">Manage All</button>
-                </div>
-                
-                <div class="dashboard-card">
-                    <h3> Judges</h3>
-                    <p>View judge assignments and expertise</p>
-                    <button onclick="showViewJudges()" class="card-button">View Judges</button>
-                </div>
-                
-                <div class="dashboard-card">
-                    <h3> Enhanced Reports</h3>
-                    <p>Generate detailed reports and analytics</p>
-                    <button onclick="showReports()" class="card-button">View Reports</button>
-                </div>
-                
-                <div class="dashboard-card">
-                    <h3> Scoring Overview</h3>
-                    <p>View competition scoring progress</p>
-                    <button onclick="showScoringOverview()" class="card-button">View Progress</button>
-                </div>
+                ${createDashboardCard('Rankings', 'View competition rankings', 'showCompetitionRankings()')}
             </div>
+        </div>
+    `;
+    
+    setContent(content);
+}
+
+function createDashboardCard(title, description, onClick) {
+    return `
+        <div class="dashboard-card">
+            <h3>${title}</h3>
+            <p>${description}</p>
+            <button onclick="${onClick}" class="card-button">View</button>
         </div>
     `;
 }
 
-// View Event Types (Staff can view but not edit)
+// =====================================================
+// EVENT TYPES
+// =====================================================
+
 function showEventTypes() {
-    document.getElementById("content").innerHTML = `
-        <h2> Available Event Types</h2>
-        <p style="margin-bottom: 20px;">Understanding different competition categories and their characteristics.</p>
-        
-        <div id="eventTypesList">
-            <div style="text-align: center; padding: 40px;">
-                <div style="font-size: 24px;">⏳</div>
-                <p>Loading event types...</p>
-            </div>
-        </div>
-    `;
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>Available Event Types</h2>
+        <p style="margin-bottom: 20px; color: #666;">Understanding different competition categories</p>
+        <div id="eventTypesList"><div class="loading">Loading event types...</div></div>
+    `);
 
-    fetch('http://localhost:3002/event-types')
-    .then(response => response.json())
-    .then(eventTypes => {
-        let eventTypesHtml = '<div style="display: grid; gap: 20px;">';
-        
-        eventTypes.forEach(eventType => {
-            const typeIcon = eventType.is_pageant ? '👑' : '🎪';
-            const typeColor = eventType.is_pageant ? '#ff69b4' : '#17a2b8';
-            
-            eventTypesHtml += `
-                <div class="dashboard-card" style="text-align: left; border-left: 5px solid ${typeColor};">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <h3>${typeIcon} ${eventType.type_name}</h3>
-                        <span style="padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: bold; background: ${typeColor}; color: white;">
-                            ${eventType.is_pageant ? 'BEAUTY PAGEANT' : 'REGULAR EVENT'}
-                        </span>
-                    </div>
-                    
-                    <p style="color: #666; margin-bottom: 15px;">
-                        ${eventType.description || 'No description provided'}
-                    </p>
-                    
-                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
-                        <h4 style="color: #800020; margin-bottom: 10px;">Registration Requirements:</h4>
-                        ${eventType.is_pageant ? `
-                            <ul style="color: #666; margin-left: 20px;">
-                                <li>Basic participant information (name, age, contact)</li>
-                                <li>Physical measurements and height</li>
-                                <li>Special talents and skills</li>
-                                <li>Awards and achievements</li>
-                                <li>Performance/talent description</li>
-                            </ul>
-                        ` : `
-                            <ul style="color: #666; margin-left: 20px;">
-                                <li>Basic participant information</li>
-                                <li>Performance title and description</li>
-                                <li>School or organization affiliation</li>
-                                <li>Competition-specific requirements</li>
-                            </ul>
-                        `}
-                    </div>
-                </div>
-            `;
-        });
-        
-        eventTypesHtml += '</div>';
-        
-        if (eventTypes.length === 0) {
-            eventTypesHtml = `
-                <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">🎭</div>
-                    <h3>No Event Types Available</h3>
-                    <p>Contact the administrator to set up event types.</p>
-                </div>
-            `;
-        }
-        
-        document.getElementById("eventTypesList").innerHTML = eventTypesHtml;
-    })
-    .catch(error => {
-        console.error('Error loading event types:', error);
-        document.getElementById("eventTypesList").innerHTML = '<p class="alert alert-error">Error loading event types.</p>';
-    });
+    fetchData(`${API_URL}/event-types`)
+        .then(displayEventTypes)
+        .catch(() => showError('eventTypesList', 'Error loading event types'));
 }
 
-// Enhanced View Competitions
+function displayEventTypes(eventTypes) {
+    if (!eventTypes || eventTypes.length === 0) {
+        document.getElementById('eventTypesList').innerHTML = createEmptyState('No Event Types', 'Contact administrator to set up event types');
+        return;
+    }
+    
+    let html = '<div style="display: grid; gap: 20px;">';
+    
+    eventTypes.forEach(eventType => {
+        const typeColor = eventType.is_pageant ? '#800020' : '#a0002a';
+        const typeLabel = eventType.is_pageant ? 'BEAUTY PAGEANT' : 'REGULAR EVENT';
+        
+        html += `
+            <div class="dashboard-card" style="text-align: left; border-left: 5px solid ${typeColor};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3>${sanitizeHTML(eventType.type_name)}</h3>
+                    <span style="padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: bold; background: ${typeColor}; color: white;">
+                        ${typeLabel}
+                    </span>
+                </div>
+                <p style="color: #666; margin-bottom: 15px;">${sanitizeHTML(eventType.description) || 'No description provided'}</p>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                    <h4 style="color: #800020; margin-bottom: 10px;">Registration Requirements:</h4>
+                    ${getRequirementsList(eventType.is_pageant)}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    document.getElementById('eventTypesList').innerHTML = html;
+}
+
+function getRequirementsList(isPageant) {
+    if (isPageant) {
+        return `
+            <ul style="color: #666; margin-left: 20px;">
+                <li>Basic participant information (name, age, contact)</li>
+                <li>Physical measurements and height</li>
+                <li>Special talents and skills</li>
+                <li>Awards and achievements</li>
+                <li>Performance description</li>
+            </ul>
+        `;
+    }
+    return `
+        <ul style="color: #666; margin-left: 20px;">
+            <li>Basic participant information</li>
+            <li>Performance title and description</li>
+            <li>School or organization affiliation</li>
+        </ul>
+    `;
+}
+
+// =====================================================
+// COMPETITIONS
+// =====================================================
+
 function showViewCompetitions() {
-    document.getElementById("content").innerHTML = `
-        <h2> Competition Management</h2>
-        
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>Competition Management</h2>
         <div style="margin-bottom: 30px;">
-            <div style="display: grid; grid-template-columns: auto auto 1fr; gap: 15px; align-items: center;">
-                <label for="eventTypeFilter" style="font-weight: 600; color: #800020;">Filter by Event Type:</label>
-                <select id="eventTypeFilter" onchange="filterCompetitionsByType()" style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px;">
-                    <option value="">All Event Types</option>
-                </select>
-                <div></div>
-            </div>
+            <label for="eventTypeFilter" style="font-weight: 600; color: #800020; margin-right: 10px;">Filter by Event Type:</label>
+            <select id="eventTypeFilter" onchange="filterCompetitionsByType()" class="filter-select">
+                <option value="">All Event Types</option>
+            </select>
         </div>
-        
-        <div id="competitionsList">
-            <div style="text-align: center; padding: 40px;">
-                <div style="font-size: 24px;">⏳</div>
-                <p>Loading competitions...</p>
-            </div>
-        </div>
-    `;
+        <div id="competitionsList"><div class="loading">Loading competitions...</div></div>
+    `);
 
-    // Load event types for filter
-    fetch('http://localhost:3002/event-types')
-    .then(response => response.json())
-    .then(eventTypes => {
-        const filterSelect = document.getElementById("eventTypeFilter");
-        eventTypes.forEach(eventType => {
-            const option = document.createElement("option");
-            option.value = eventType.event_type_id;
-            option.textContent = `${eventType.type_name} ${eventType.is_pageant ? '👑' : '🎪'}`;
-            filterSelect.appendChild(option);
-        });
-    });
-
-    // Load competitions
-    loadCompetitions();
+    Promise.all([
+        fetchData(`${API_URL}/event-types`),
+        fetchData(`${API_URL}/competitions`)
+    ])
+    .then(([eventTypes, competitions]) => {
+        populateEventTypeFilter(eventTypes);
+        allCompetitions = competitions;
+        displayCompetitions(competitions);
+    })
+    .catch(() => showError('competitionsList', 'Error loading competitions'));
 }
 
-function loadCompetitions(eventTypeFilter = '') {
-    fetch('http://localhost:3002/competitions')
-    .then(response => response.json())
-    .then(competitions => {
-        // Filter by event type if specified
-        let filteredCompetitions = competitions;
-        if (eventTypeFilter) {
-            filteredCompetitions = competitions.filter(comp => comp.event_type_id == eventTypeFilter);
-        }
-        
-        let competitionsHtml = '';
-        
-        if (filteredCompetitions.length === 0) {
-            competitionsHtml = `
-                <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;"></div>
-                    <h3>${eventTypeFilter ? 'No competitions found for this event type' : 'No Competitions Available'}</h3>
-                    <p>Contact the administrator to set up competitions.</p>
-                </div>
-            `;
-        } else {
-            competitionsHtml = '<div style="display: grid; gap: 20px;">';
-            
-            filteredCompetitions.forEach(competition => {
-                const eventIcon = competition.is_pageant ? 'R' : 'P';
-                const typeColor = competition.is_pageant ? '#ff69b4' : '#17a2b8';
-                
-                competitionsHtml += `
-                    <div class="dashboard-card" style="text-align: left; border-left: 5px solid ${typeColor};">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                            <h3>${competition.competition_name} ${eventIcon}</h3>
-                            <span style="padding: 6px 12px; border-radius: 15px; font-size: 12px; font-weight: bold; background: ${typeColor}; color: white;">
-                                ${competition.type_name}
-                            </span>
-                        </div>
-                        
-                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin: 15px 0;">
-                            <div>
-                                <p><strong>Date:</strong> ${competition.competition_date}</p>
-                                <p><strong>Participants:</strong> ${competition.participant_count || 0}</p>
-                            </div>
-                            <div>
-                                <p><strong>Judges:</strong> ${competition.judge_count || 0}</p>
-                                <p><strong>Type:</strong> ${competition.is_pageant ? 'Beauty Pageant' : 'Performance Event'}</p>
-                            </div>
-                            <div>
-                                <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Active</span></p>
-                            </div>
-                        </div>
-                        
-                        ${competition.event_description ? `
-                            <div style="background: #f8f9fa; padding: 12px; border-radius: 8px; margin: 15px 0;">
-                                <strong>Description:</strong> ${competition.event_description}
-                            </div>
-                        ` : ''}
-                        
-                        <div style="margin-top: 20px;">
-                            <button onclick="viewCompetitionDetails(${competition.competition_id})" style="margin: 2px; padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">👁️ View Details</button>
-                            <button onclick="viewCompetitionCriteria(${competition.competition_id}, '${competition.competition_name}')" style="margin: 2px; padding: 8px 16px; background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%); color: white; border: none; border-radius: 4px; cursor: pointer;">📋 View Criteria</button>
-                            <button onclick="registerParticipantForCompetition(${competition.competition_id})" style="margin: 2px; padding: 8px 16px; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border: none; border-radius: 4px; cursor: pointer;">➕ Add Participant</button>
-                        </div>
-                    </div>
-                `;
-            });
-            
-            competitionsHtml += '</div>';
-        }
-
-        document.getElementById("competitionsList").innerHTML = competitionsHtml;
-    })
-    .catch(error => {
-        console.error('Error loading competitions:', error);
-        document.getElementById("competitionsList").innerHTML = '<p class="alert alert-error">Error loading competitions.</p>';
+function populateEventTypeFilter(eventTypes) {
+    const filterSelect = document.getElementById('eventTypeFilter');
+    if (!filterSelect) return;
+    
+    eventTypes.forEach(eventType => {
+        const option = document.createElement('option');
+        option.value = eventType.event_type_id;
+        option.textContent = eventType.type_name;
+        filterSelect.appendChild(option);
     });
 }
 
 function filterCompetitionsByType() {
-    const eventTypeId = document.getElementById("eventTypeFilter").value;
-    loadCompetitions(eventTypeId);
+    const eventTypeId = document.getElementById('eventTypeFilter').value;
+    const filtered = eventTypeId ? 
+        allCompetitions.filter(comp => comp.event_type_id == eventTypeId) : 
+        allCompetitions;
+    displayCompetitions(filtered);
 }
 
-// View Competition Details
+function displayCompetitions(competitions) {
+    if (!competitions || competitions.length === 0) {
+        document.getElementById('competitionsList').innerHTML = createEmptyState('No Competitions Found', 'Contact administrator to set up competitions');
+        return;
+    }
+
+    let html = '<div style="display: grid; gap: 20px;">';
+    
+    competitions.forEach(competition => {
+        const typeColor = competition.is_pageant ? '#800020' : '#a0002a';
+        
+        html += `
+            <div class="dashboard-card" style="text-align: left; border-left: 5px solid ${typeColor};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3>${sanitizeHTML(competition.competition_name)}</h3>
+                    <span style="padding: 6px 12px; border-radius: 15px; font-size: 12px; font-weight: bold; background: ${typeColor}; color: white;">
+                        ${sanitizeHTML(competition.type_name)}
+                    </span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin: 15px 0;">
+                    <div>
+                        <p><strong>Date:</strong> ${formatDate(competition.competition_date)}</p>
+                        <p><strong>Participants:</strong> ${competition.participant_count || 0}</p>
+                    </div>
+                    <div>
+                        <p><strong>Judges:</strong> ${competition.judge_count || 0}</p>
+                        <p><strong>Type:</strong> ${competition.is_pageant ? 'Beauty Pageant' : 'Performance Event'}</p>
+                    </div>
+                    <div>
+                        <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Active</span></p>
+                    </div>
+                </div>
+                ${competition.event_description ? `
+                    <div style="background: #f8f9fa; padding: 12px; border-radius: 8px; margin: 15px 0;">
+                        <strong>Description:</strong> ${sanitizeHTML(competition.event_description)}
+                    </div>
+                ` : ''}
+                <div style="margin-top: 20px;">
+                    <button onclick="viewCompetitionDetails(${competition.competition_id})" class="card-button">View Details</button>
+                    <button onclick="viewCompetitionCriteria(${competition.competition_id})" class="card-button">View Criteria</button>
+                    <button onclick="registerParticipantForCompetition(${competition.competition_id})" class="card-button">Add Participant</button>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    document.getElementById('competitionsList').innerHTML = html;
+}
+
 function viewCompetitionDetails(competitionId) {
+    clearAllIntervals();
+    
     Promise.all([
-        fetch(`http://localhost:3002/competition/${competitionId}`).then(r => r.json()),
-        fetch(`http://localhost:3002/participants/${competitionId}`).then(r => r.json()),
-        fetch(`http://localhost:3002/judges`).then(r => r.json())
+        fetchData(`${API_URL}/competition/${competitionId}`),
+        fetchData(`${API_URL}/participants/${competitionId}`),
+        fetchData(`${API_URL}/judges`)
     ])
     .then(([competition, participants, allJudges]) => {
         const judges = allJudges.filter(j => j.competition_id == competitionId);
-        const eventIcon = competition.is_pageant ? '👑' : '🎪';
-        const typeColor = competition.is_pageant ? '#ff69b4' : '#17a2b8';
-        
-        let detailsHtml = `
-            <h2>👁️ Competition Details</h2>
-            
-            <div class="dashboard-card" style="text-align: left; border-left: 5px solid ${typeColor};">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h3>${competition.competition_name} ${eventIcon}</h3>
-                    <span style="padding: 8px 16px; border-radius: 15px; font-weight: bold; background: ${typeColor}; color: white;">
-                        ${competition.type_name}
-                    </span>
-                </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 20px;">
-                    <div>
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Basic Information</h4>
-                        <p><strong>Date:</strong> ${competition.competition_date}</p>
-                        <p><strong>Event Type:</strong> ${competition.type_name} ${eventIcon}</p>
-                        <p><strong>Category:</strong> ${competition.is_pageant ? 'Beauty Pageant Event' : 'Performance Competition'}</p>
-                    </div>
-                    <div>
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Statistics</h4>
-                        <p><strong>Total Participants:</strong> ${participants.length}</p>
-                        <p><strong>Assigned Judges:</strong> ${judges.length}</p>
-                        <p><strong>Registration Status:</strong> <span style="color: #28a745; font-weight: bold;">Active</span></p>
-                    </div>
-                </div>
-                
-                ${competition.event_description ? `
-                    <div style="margin-bottom: 20px;">
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Event Description</h4>
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 10px;">
-                            ${competition.event_description}
-                        </div>
-                    </div>
-                ` : ''}
-            </div>
-            
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
-                <div class="dashboard-card" style="text-align: left;">
-                    <h4 style="color: #800020; margin-bottom: 15px;">👥 Participants Overview</h4>
-        `;
-        
-        if (participants.length === 0) {
-            detailsHtml += '<p style="color: #666;">No participants registered yet.</p>';
-        } else {
-            // Group participants by registration status
-            const statusGroups = participants.reduce((groups, participant) => {
-                if (!groups[participant.status]) {
-                    groups[participant.status] = [];
-                }
-                groups[participant.status].push(participant);
-                return groups;
-            }, {});
-            
-            Object.entries(statusGroups).forEach(([status, participants]) => {
-                const statusColor = status === 'paid' ? '#28a745' : status === 'pending' ? '#ffc107' : '#17a2b8';
-                detailsHtml += `
-                    <div style="margin-bottom: 10px;">
-                        <span style="color: ${statusColor}; font-weight: bold;">●</span> 
-                        ${status.toUpperCase()}: ${participants.length} participants
-                    </div>
-                `;
-            });
-        }
-        
-        detailsHtml += `
-                </div>
-                
-                <div class="dashboard-card" style="text-align: left;">
-                    <h4 style="color: #800020; margin-bottom: 15px;">⚖️ Judges Overview</h4>
-        `;
-        
-        if (judges.length === 0) {
-            detailsHtml += '<p style="color: #666;">No judges assigned yet.</p>';
-        } else {
-            judges.forEach(judge => {
-                detailsHtml += `
-                    <div style="margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 5px;">
-                        <strong>${judge.judge_name}</strong><br>
-                        <small style="color: #666;">${judge.expertise}</small>
-                    </div>
-                `;
-            });
-        }
-        
-        detailsHtml += `
-                </div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 30px;">
-                <button onclick="showViewCompetitions()" style="padding: 12px 20px; background: #6c757d; color: white; border: none; border-radius: 8px; cursor: pointer; margin-right: 10px;">← Back to Competitions</button>
-                <button onclick="viewCompetitionCriteria(${competitionId}, '${competition.competition_name.replace(/'/g, "\\'")}')" class="card-button">📋 View Scoring Criteria</button>
-            </div>
-        `;
-        
-        document.getElementById("content").innerHTML = detailsHtml;
+        displayCompetitionDetailsPage(competition, participants, judges);
     })
-    .catch(error => {
-        console.error('Error loading competition details:', error);
-        alert('Error loading competition details');
-    });
+    .catch(() => showNotification('Error loading competition details', 'error'));
 }
 
-// View Competition Criteria (Staff can view but not edit)
-function viewCompetitionCriteria(competitionId, competitionName) {
-    document.getElementById("content").innerHTML = `
-        <h2>📋 Competition Scoring Criteria</h2>
-        <h3 style="color: #800020;">${competitionName}</h3>
-        
-        <div style="background: #e7f3ff; border: 2px solid #2196F3; border-radius: 8px; padding: 15px; margin: 20px 0;">
-            <strong>ℹ️ Information for Staff:</strong>
-            <ul style="margin-top: 10px; color: #1976d2;">
-                <li>These criteria determine how judges evaluate participants</li>
-                <li>Each criterion has a specific percentage weight in the final score</li>
-                <li>Judges score each criterion separately from 0 to 100 points</li>
-                <li>Final scores are calculated using weighted averages</li>
-            </ul>
+function displayCompetitionDetailsPage(competition, participants, judges) {
+    const typeColor = competition.is_pageant ? '#800020' : '#a0002a';
+    
+    const statusGroups = participants.reduce((groups, participant) => {
+        if (!groups[participant.status]) groups[participant.status] = [];
+        groups[participant.status].push(participant);
+        return groups;
+    }, {});
+    
+    let html = `
+        <h2>Competition Details</h2>
+        <div class="dashboard-card" style="text-align: left; border-left: 5px solid ${typeColor};">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3>${sanitizeHTML(competition.competition_name)}</h3>
+                <span style="padding: 8px 16px; border-radius: 15px; font-weight: bold; background: ${typeColor}; color: white;">
+                    ${sanitizeHTML(competition.type_name)}
+                </span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 20px;">
+                <div>
+                    <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Basic Information</h4>
+                    <p><strong>Date:</strong> ${formatDate(competition.competition_date)}</p>
+                    <p><strong>Event Type:</strong> ${sanitizeHTML(competition.type_name)}</p>
+                    <p><strong>Category:</strong> ${competition.is_pageant ? 'Beauty Pageant Event' : 'Performance Competition'}</p>
+                </div>
+                <div>
+                    <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Statistics</h4>
+                    <p><strong>Total Participants:</strong> ${participants.length}</p>
+                    <p><strong>Assigned Judges:</strong> ${judges.length}</p>
+                    <p><strong>Registration Status:</strong> <span style="color: #28a745; font-weight: bold;">Active</span></p>
+                </div>
+            </div>
+            ${competition.event_description ? `
+                <div style="margin-bottom: 20px;">
+                    <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Event Description</h4>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 10px;">
+                        ${sanitizeHTML(competition.event_description)}
+                    </div>
+                </div>
+            ` : ''}
         </div>
         
-        <div id="criteriaDisplay">
-            <div style="text-align: center; padding: 40px;">
-                <div style="font-size: 24px;">⏳</div>
-                <p>Loading scoring criteria...</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+            <div class="dashboard-card" style="text-align: left;">
+                <h4 style="color: #800020; margin-bottom: 15px;">Participants Overview</h4>
+                ${participants.length === 0 ? '<p style="color: #666;">No participants registered yet.</p>' : ''}
+    `;
+    
+    Object.entries(statusGroups).forEach(([status, statusParticipants]) => {
+        const statusColor = getStatusColor(status);
+        html += `
+            <div style="margin-bottom: 10px;">
+                <span style="color: ${statusColor}; font-weight: bold;">●</span> 
+                ${status.toUpperCase()}: ${statusParticipants.length} participants
+            </div>
+        `;
+    });
+    
+    html += `
+            </div>
+            <div class="dashboard-card" style="text-align: left;">
+                <h4 style="color: #800020; margin-bottom: 15px;">Judges Overview</h4>
+                ${judges.length === 0 ? '<p style="color: #666;">No judges assigned yet.</p>' : ''}
+    `;
+    
+    judges.forEach(judge => {
+        html += `
+            <div style="margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 5px;">
+                <strong>${sanitizeHTML(judge.judge_name)}</strong><br>
+                <small style="color: #666;">${sanitizeHTML(judge.expertise)}</small>
+            </div>
+        `;
+    });
+    
+    html += `
             </div>
         </div>
-        
-        <div style="margin-top: 30px; text-align: center;">
-            <button onclick="showViewCompetitions()" class="secondary">← Back to Competitions</button>
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="showViewCompetitions()" class="secondary">Back to Competitions</button>
+            <button onclick="viewCompetitionCriteria(${competition.competition_id})" class="card-button">View Scoring Criteria</button>
         </div>
     `;
-
-    fetch(`http://localhost:3002/competition-criteria/${competitionId}`)
-    .then(response => response.json())
-    .then(criteria => {
-        if (criteria.length === 0) {
-            document.getElementById("criteriaDisplay").innerHTML = `
-                <div style="text-align: center; padding: 40px; background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">⚠️</div>
-                    <h3>No Scoring Criteria Set</h3>
-                    <p>The administrator hasn't set up scoring criteria for this competition yet.</p>
-                    <p>Contact them to configure the judging criteria before the competition begins.</p>
-                </div>
-            `;
-            return;
-        }
-
-        let criteriaHtml = `
-            <div style="display: grid; gap: 15px;">
-                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center;">
-                    <h4 style="color: #800020; margin-bottom: 10px;">Scoring Breakdown</h4>
-                    <div style="display: flex; justify-content: center; gap: 20px;">
-                        <div><strong>Total Criteria:</strong> ${criteria.length}</div>
-                        <div><strong>Total Weight:</strong> ${criteria.reduce((sum, c) => sum + parseFloat(c.percentage), 0).toFixed(1)}%</div>
-                    </div>
-                </div>
-        `;
-        
-        criteria.forEach((criterion, index) => {
-            criteriaHtml += `
-                <div class="dashboard-card" style="text-align: left; border-left: 5px solid #800020;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <h4 style="color: #800020; margin: 0;">#{criterion.order_number} ${criterion.criteria_name}</h4>
-                        <div style="background: linear-gradient(135deg, #800020 0%, #a0002a 100%); color: white; padding: 8px 16px; border-radius: 20px; font-weight: bold;">
-                            ${criterion.percentage}%
-                        </div>
-                    </div>
-                    
-                    <p style="color: #666; margin-bottom: 15px;">
-                        <strong>What judges evaluate:</strong> ${criterion.description || 'This aspect of the performance will be scored'}
-                    </p>
-                    
-                    <div style="display: flex; align-items: center; gap: 20px; background: #f8f9fa; padding: 12px; border-radius: 8px;">
-                        <div><strong>Score Range:</strong> 0 - ${criterion.max_score} points</div>
-                        <div style="color: #666;">|</div>
-                        <div><strong>Weight:</strong> <span style="color: #800020;">${criterion.percentage}%</span> of final score</div>
-                    </div>
-                </div>
-            `;
-        });
-        
-        criteriaHtml += '</div>';
-        document.getElementById("criteriaDisplay").innerHTML = criteriaHtml;
-    })
-    .catch(error => {
-        console.error('Error loading criteria:', error);
-        document.getElementById("criteriaDisplay").innerHTML = '<p class="alert alert-error">Error loading scoring criteria.</p>';
-    });
+    
+    setContent(html);
 }
 
-// Enhanced Add Participant Form with Auto-Detection
-function showAddParticipantForm(preselectedCompetitionId = null) {
-    document.getElementById("content").innerHTML = `
-        <h2>👥 Register New Participant</h2>
-        
-        <form id="addParticipantForm" style="max-width: 800px;">
-            <div class="form-section">
-                <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin-bottom: 20px;">Basic Information</h3>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                    <div>
-                        <label for="participant_name">Participant Name:</label>
-                        <input type="text" id="participant_name" name="participant_name" required>
-                    </div>
-                    <div>
-                        <label for="email">Email Address:</label>
-                        <input type="email" id="email" name="email" required>
-                    </div>
+function viewCompetitionCriteria(competitionId) {
+    clearAllIntervals();
+    
+    fetchData(`${API_URL}/competition/${competitionId}`)
+        .then(competition => {
+            setContent(`
+                <h2>Competition Scoring Criteria</h2>
+                <h3 style="color: #800020;">${sanitizeHTML(competition.competition_name)}</h3>
+                <div style="background: #e7f3ff; border: 2px solid #2196F3; border-radius: 8px; padding: 15px; margin: 20px 0;">
+                    <strong>Information:</strong>
+                    <ul style="margin-top: 10px; color: #1976d2;">
+                        <li>These criteria determine how judges evaluate participants</li>
+                        <li>Each criterion has a specific percentage weight in the final score</li>
+                        <li>Judges score each criterion separately from 0 to 100 points</li>
+                        <li>Final scores are calculated using weighted averages</li>
+                    </ul>
                 </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
-                    <div>
-                        <label for="phone">Phone Number:</label>
-                        <input type="tel" id="phone" name="phone">
-                    </div>
-                    <div>
-                        <label for="age">Age:</label>
-                        <input type="number" id="age" name="age" min="1" max="120" required>
-                    </div>
-                    <div>
-                        <label for="gender">Gender:</label>
-                        <select id="gender" name="gender" required>
-                            <option value="">Select Gender</option>
-                            <option value="male">Male</option>
-                            <option value="female">Female</option>
-                            <option value="other">Other</option>
-                        </select>
-                    </div>
+                <div id="criteriaDisplay"><div class="loading">Loading scoring criteria...</div></div>
+                <div style="margin-top: 30px; text-align: center;">
+                    <button onclick="showViewCompetitions()" class="secondary">Back to Competitions</button>
                 </div>
-                
-                <label for="school_organization">School/Organization:</label>
-                <input type="text" id="school_organization" name="school_organization" placeholder="Enter school, company, or organization name">
-            </div>
+            `);
             
-            <div class="form-section">
-                <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin: 30px 0 20px 0;">Competition Details</h3>
-                
-                <label for="competition">Select Competition:</label>
-                <select id="competition" name="competition" required>
-                    <option value="">Choose Competition</option>
-                </select>
-                
-                <div id="competitionInfo" style="display: none; background: #e7f3ff; border: 2px solid #2196F3; border-radius: 8px; padding: 15px; margin: 15px 0;">
-                    <div id="competitionDetails"></div>
-                </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr auto; gap: 15px;">
-                    <div>
-                        <label for="performance_title">Performance/Entry Title:</label>
-                        <input type="text" id="performance_title" name="performance_title" placeholder="Title of performance, talent, or entry">
-                    </div>
-                    <div>
-                       <label for="status">Participant Status:</label>
-<select id="status" name="status" required>
-    <option value="pending">Pending</option>
-    <option value="ongoing">Ongoing</option>
-    <option value="done">Done</option>
-</select>
-                    </div>
-                </div>
-                
-                <label for="performance_description">Performance Description:</label>
-                <textarea id="performance_description" name="performance_description" rows="3" placeholder="Describe the performance, talent, or what the participant will be presenting..."></textarea>
-            </div>
-            
-            <div id="pageantSection" class="form-section" style="display: none;">
-                <h3 style="color: #ff69b4; border-bottom: 2px solid #ff69b4; padding-bottom: 10px; margin: 30px 0 20px 0;">👑 Beauty Pageant Information</h3>
-                
-                <div style="background: #fff0f5; border: 2px solid #ff69b4; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                    <strong>📝 Additional Requirements for Beauty Pageants:</strong>
-                    <p style="color: #666; margin-top: 8px;">Beauty pageant competitions require additional information for comprehensive evaluation.</p>
-                </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                    <div>
-                        <label for="height">Height:</label>
-                        <input type="text" id="height" name="height" placeholder="e.g.,<input type="text" id="height" name="height" placeholder="e.g., 5'6&quot; or 168cm">
-                    </div>
-                    <div>
-                        <label for="measurements">Measurements:</label>
-                        <input type="text" id="measurements" name="measurements" placeholder="e.g., 34-24-36">
-                    </div>
-                </div>
-                
-                <label for="talents">Special Talents & Skills:</label>
-                <textarea id="talents" name="talents" rows="3" placeholder="List special talents, skills, musical instruments, languages, etc..."></textarea>
-                
-                <label for="special_awards">Awards & Achievements:</label>
-                <textarea id="special_awards" name="special_awards" rows="3" placeholder="List awards, honors, achievements, leadership positions, academic honors, etc..."></textarea>
-            </div>
-            
-            <div style="margin-top: 40px; text-align: center;">
-                <button type="submit" style="background: linear-gradient(135deg, #800020 0%, #a0002a 100%); color: white; border: none; padding: 15px 40px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 18px;">
-                    ✅ Register Participant
-                </button>
-                <button type="button" onclick="showViewParticipants()" class="secondary" style="margin-left: 15px; padding: 15px 30px; font-size: 16px;">
-                    Cancel
-                </button>
-            </div>
-        </form>
-    `;
+            return fetchData(`${API_URL}/competition-criteria/${competitionId}`);
+        })
+        .then(displayCriteria)
+        .catch(() => showError('criteriaDisplay', 'Error loading criteria'));
+}
 
-    // Load competitions and handle form logic
-    fetch('http://localhost:3002/competitions')
-    .then(response => response.json())
-    .then(competitions => {
-        const competitionSelect = document.getElementById("competition");
-        competitions.forEach(competition => {
-            const option = document.createElement("option");
-            option.value = competition.competition_id;
-            option.setAttribute('data-is-pageant', competition.is_pageant);
-            option.setAttribute('data-type-name', competition.type_name);
-            option.setAttribute('data-description', competition.event_description || '');
-            const eventIcon = competition.is_pageant ? '👑' : '🎪';
-            option.textContent = `${competition.competition_name} (${competition.type_name}) ${eventIcon}`;
-            competitionSelect.appendChild(option);
-        });
-
-        // Preselect competition if provided
-        if (preselectedCompetitionId) {
-            competitionSelect.value = preselectedCompetitionId;
-            handleCompetitionChange();
-        }
-
-        // Handle competition selection changes
-        competitionSelect.onchange = handleCompetitionChange;
-    })
-    .catch(error => {
-        console.error('Error fetching competitions:', error);
-    });
-
-    function handleCompetitionChange() {
-        const select = document.getElementById("competition");
-        const selectedOption = select.options[select.selectedIndex];
-        
-        if (select.value) {
-            const isPageant = selectedOption.getAttribute('data-is-pageant') === '1';
-            const typeName = selectedOption.getAttribute('data-type-name');
-            const description = selectedOption.getAttribute('data-description');
-            const eventIcon = isPageant ? '👑' : '🎪';
-            
-            // Show/hide pageant section
-            document.getElementById("pageantSection").style.display = isPageant ? "block" : "none";
-            
-            // Show competition info
-            document.getElementById("competitionInfo").style.display = "block";
-            document.getElementById("competitionDetails").innerHTML = `
-                <h4 style="color: #800020; margin-bottom: 10px;">${eventIcon} ${typeName} Event</h4>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                    <div>
-                        <p><strong>Category:</strong> ${isPageant ? 'Beauty Pageant' : 'Performance Competition'}</p>
-                        <p><strong>Registration Fields:</strong> ${isPageant ? 'Extended (includes pageant info)' : 'Standard'}</p>
-                    </div>
-                    <div>
-                        <p><strong>Evaluation Type:</strong> Multi-Criteria Scoring</p>
-                        <p><strong>Special Requirements:</strong> ${isPageant ? 'Physical measurements, talents' : 'Performance details'}</p>
-                    </div>
-                </div>
-                ${description ? `<p style="margin-top: 10px;"><strong>Description:</strong> ${description}</p>` : ''}
-            `;
-        } else {
-            document.getElementById("pageantSection").style.display = "none";
-            document.getElementById("competitionInfo").style.display = "none";
-        }
+function displayCriteria(criteria) {
+    if (!criteria || criteria.length === 0) {
+        document.getElementById('criteriaDisplay').innerHTML = `
+            <div style="text-align: center; padding: 40px; background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px;">
+                <h3>No Scoring Criteria Set</h3>
+                <p>The administrator has not set up scoring criteria for this competition yet.</p>
+            </div>
+        `;
+        return;
     }
 
-    document.getElementById("addParticipantForm").onsubmit = function(event) {
-        event.preventDefault();
+    const totalWeight = criteria.reduce((sum, c) => sum + parseFloat(c.percentage), 0).toFixed(1);
+
+    let html = `
+        <div style="display: grid; gap: 15px;">
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center;">
+                <h4 style="color: #800020; margin-bottom: 10px;">Scoring Breakdown</h4>
+                <div style="display: flex; justify-content: center; gap: 20px;">
+                    <div><strong>Total Criteria:</strong> ${criteria.length}</div>
+                    <div><strong>Total Weight:</strong> ${totalWeight}%</div>
+                </div>
+            </div>
+    `;
+    
+    criteria.forEach((criterion) => {
+        html += `
+            <div class="dashboard-card" style="text-align: left; border-left: 5px solid #800020;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h4 style="color: #800020; margin: 0;">#${criterion.order_number} ${sanitizeHTML(criterion.criteria_name)}</h4>
+                    <div style="background: #800020; color: white; padding: 8px 16px; border-radius: 20px; font-weight: bold;">
+                        ${criterion.percentage}%
+                    </div>
+                </div>
+                <p style="color: #666; margin-bottom: 15px;">
+                    <strong>What judges evaluate:</strong> ${sanitizeHTML(criterion.description) || 'This aspect of the performance will be scored'}
+                </p>
+                <div style="display: flex; align-items: center; gap: 20px; background: #f8f9fa; padding: 12px; border-radius: 8px;">
+                    <div><strong>Score Range:</strong> 0 - ${criterion.max_score} points</div>
+                    <div style="color: #666;">|</div>
+                    <div><strong>Weight:</strong> <span style="color: #800020;">${criterion.percentage}%</span> of final score</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    document.getElementById('criteriaDisplay').innerHTML = html;
+}
+
+// =====================================================
+// PARTICIPANTS - ADD FORM
+// =====================================================
+
+function showAddParticipantForm() {
+    setContent(`
+        <form id="addParticipantForm">
+            <h2>Add New Participant</h2>
+
+            <label for="participant_name">Full Name</label>
+            <input type="text" id="participant_name" placeholder="Enter participant full name" required>
+
+            <label for="contestant_number">Contestant Number</label>
+            <input type="text" id="contestant_number" placeholder="e.g., 01, 02, etc." required>
+
+            <label for="photo_url">Photo URL</label>
+            <input type="url" id="photo_url" placeholder="Paste image link or leave blank">
+
+            <label for="email">Email</label>
+            <input type="email" id="email" placeholder="Optional email address">
+
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" placeholder="Optional phone number">
+
+            <label for="age">Age</label>
+            <input type="number" id="age" placeholder="Optional age">
+
+            <label for="gender">Gender</label>
+            <select id="gender">
+                <option value="">Select gender</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+            </select>
+
+            <label for="school_organization">School / Organization</label>
+            <input type="text" id="school_organization" placeholder="Enter school or organization">
+
+            <label for="performance_title">Performance Title</label>
+            <input type="text" id="performance_title" placeholder="Enter performance title">
+
+            <label for="performance_description">Performance Description</label>
+            <textarea id="performance_description" placeholder="Short description of performance"></textarea>
+
+            <label for="talents">Talent / Skills</label>
+            <input type="text" id="talents" placeholder="Optional talents or skills">
+
+            <label for="special_awards">Awards / Achievements</label>
+            <textarea id="special_awards" placeholder="Optional awards and achievements"></textarea>
+
+            <label for="competition">Select Competition</label>
+            <select id="competition" required></select>
+
+            <button type="submit">Add Participant</button>
+        </form>
+    `);
+
+    loadCompetitionsDropdown("competition");
+    setupParticipantFormSubmit();
+}
+
+function getBasicInfoSection() {
+    return `
+        <div class="form-section">
+            <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin-bottom: 20px;">Basic Information</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div>
+                    <label for="participant_name">Participant Name: <span style="color: red;">*</span></label>
+                    <input type="text" id="participant_name" required>
+                </div>
+                <div>
+                    <label for="email">Email Address: <span style="color: red;">*</span></label>
+                    <input type="email" id="email" required>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                <div>
+                    <label for="phone">Phone Number:</label>
+                    <input type="tel" id="phone">
+                </div>
+                <div>
+                    <label for="age">Age: <span style="color: red;">*</span></label>
+                    <input type="number" id="age" min="1" max="120" required>
+                </div>
+                <div>
+                    <label for="gender">Gender: <span style="color: red;">*</span></label>
+                    <select id="gender" required>
+                        <option value="">Select Gender</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <label for="school_organization">School/Organization:</label>
+            <input type="text" id="school_organization" placeholder="Enter school, company, or organization name">
+        </div>
+    `;
+}
+
+function getCompetitionDetailsSection() {
+    return `
+        <div class="form-section">
+            <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin: 30px 0 20px 0;">Competition Details</h3>
+            <label for="competition">Select Competition: <span style="color: red;">*</span></label>
+            <select id="competition" required>
+                <option value="">Choose Competition</option>
+            </select>
+            <div id="competitionInfo" style="display: none; background: #e7f3ff; border: 2px solid #2196F3; border-radius: 8px; padding: 15px; margin: 15px 0;">
+                <div id="competitionDetails"></div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr auto; gap: 15px;">
+                <div>
+                    <label for="performance_title">Performance/Entry Title:</label>
+                    <input type="text" id="performance_title" placeholder="Title of performance, talent, or entry">
+                </div>
+                <div>
+                    <label for="status">Status: <span style="color: red;">*</span></label>
+                    <select id="status" required>
+                        <option value="pending">Pending</option>
+                        <option value="ongoing">Ongoing</option>
+                        <option value="done">Done</option>
+                    </select>
+                </div>
+            </div>
+            <label for="performance_description">Performance Description:</label>
+            <textarea id="performance_description" rows="3" placeholder="Describe the performance..."></textarea>
+        </div>
+    `;
+}
+
+function getPageantSection() {
+    return `
+        <div id="pageantSection" class="form-section" style="display: none;">
+            <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin: 30px 0 20px 0;">Pageant Information</h3>
+            <div style="background: #fff0f5; border: 2px solid #800020; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                <strong>Additional Requirements for Beauty Pageants</strong>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div>
+                    <label for="contestant_number">Contestant/Group Number: <span style="color: red;">*</span></label>
+                    <input type="text" id="contestant_number" placeholder="e.g., 1, 2, Group A">
+                </div>
+                <div>
+                    <label for="height">Height:</label>
+                    <input type="text" id="height" placeholder="e.g., 5'6&quot; or 168cm">
+                </div>
+            </div>
+            <label for="photo_url">Photo URL: <span style="color: red;">*</span></label>
+            <input type="url" id="photo_url" placeholder="https://example.com/photo.jpg">
+            <small style="color: #666; display: block; margin-top: 5px;">Upload photo to Imgur or PostImages, then paste URL here</small>
+            <label for="talents">Special Talents & Skills:</label>
+            <textarea id="talents" rows="3" placeholder="List special talents, skills..."></textarea>
+            <label for="special_awards">Awards & Achievements:</label>
+            <textarea id="special_awards" rows="3" placeholder="List awards, honors..."></textarea>
+        </div>
+    `;
+}
+
+function getFormButtons(cancelFunction) {
+    return `
+        <div style="margin-top: 40px; text-align: center;">
+            <button type="submit" class="card-button" style="padding: 15px 40px; font-size: 18px;">Register Participant</button>
+            <button type="button" onclick="${cancelFunction}" class="secondary" style="margin-left: 15px; padding: 15px 30px; font-size: 16px;">Cancel</button>
+        </div>
+    `;
+}
+
+function populateCompetitionSelect(competitions, preselectedId) {
+    const competitionSelect = document.getElementById('competition');
+    if (!competitionSelect) return;
+    
+    competitions.forEach(competition => {
+        const option = document.createElement('option');
+        option.value = competition.competition_id;
+        option.setAttribute('data-is-pageant', competition.is_pageant);
+        option.setAttribute('data-type-name', competition.type_name);
+        option.setAttribute('data-description', competition.event_description || '');
+        option.textContent = `${competition.competition_name} (${competition.type_name})`;
+        competitionSelect.appendChild(option);
+    });
+
+    if (preselectedId) {
+        competitionSelect.value = preselectedId;
+        handleCompetitionChange();
+    }
+}
+
+function setupCompetitionChangeHandler() {
+    const select = document.getElementById('competition');
+    if (select) {
+        select.onchange = handleCompetitionChange;
+    }
+}
+
+function handleCompetitionChange() {
+    const select = document.getElementById('competition');
+    const selectedOption = select.options[select.selectedIndex];
+    
+    if (!select.value) {
+        document.getElementById('pageantSection').style.display = 'none';
+        document.getElementById('competitionInfo').style.display = 'none';
+        return;
+    }
+    
+    const isPageant = selectedOption.getAttribute('data-is-pageant') === '1';
+    const typeName = selectedOption.getAttribute('data-type-name');
+    const description = selectedOption.getAttribute('data-description');
+    
+    document.getElementById('pageantSection').style.display = isPageant ? 'block' : 'none';
+    
+    const contestantNumber = document.getElementById('contestant_number');
+    const photoUrl = document.getElementById('photo_url');
+    if (contestantNumber) contestantNumber.required = isPageant;
+    if (photoUrl) photoUrl.required = isPageant;
+    
+    document.getElementById('competitionInfo').style.display = 'block';
+    document.getElementById('competitionDetails').innerHTML = `
+        <h4 style="color: #800020; margin-bottom: 10px;">${sanitizeHTML(typeName)} Event</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div>
+                <p><strong>Category:</strong> ${isPageant ? 'Beauty Pageant' : 'Performance Competition'}</p>
+                <p><strong>Registration Fields:</strong> ${isPageant ? 'Extended' : 'Standard'}</p>
+            </div>
+            <div>
+                <p><strong>Evaluation Type:</strong> Multi-Criteria Scoring</p>
+                <p><strong>Special Requirements:</strong> ${isPageant ? 'Physical measurements, talents' : 'Performance details'}</p>
+            </div>
+        </div>
+        ${description ? `<p style="margin-top: 10px;"><strong>Description:</strong> ${sanitizeHTML(description)}</p>` : ''}
+    `;
+}
+
+function setupParticipantFormSubmit() {
+    const form = document.getElementById('addParticipantForm');
+    if (!form) return;
+
+    form.onsubmit = function(e) {
+        e.preventDefault();
 
         const participantData = {
-            participant_name: document.getElementById("participant_name").value,
-            email: document.getElementById("email").value,
-            phone: document.getElementById("phone").value,
-            age: document.getElementById("age").value,
-            gender: document.getElementById("gender").value,
-            school_organization: document.getElementById("school_organization").value,
-            performance_title: document.getElementById("performance_title").value,
-            performance_description: document.getElementById("performance_description").value,
-            competition_id: document.getElementById("competition").value,
-            status: document.getElementById("status").value,
-            // Pageant specific fields
-            height: document.getElementById("height").value,
-            measurements: document.getElementById("measurements").value,
-            talents: document.getElementById("talents").value,
-            special_awards: document.getElementById("special_awards").value
+            participant_name: getInputValue('participant_name'),
+            contestant_number: getInputValue('contestant_number'),
+            photo_url: getInputValue('photo_url'),
+            email: getInputValue('email'),
+            phone: getInputValue('phone'),
+            age: getInputValue('age'),
+            gender: getInputValue('gender'),
+            school_organization: getInputValue('school_organization'),
+            performance_title: getInputValue('performance_title'),
+            performance_description: getInputValue('performance_description'),
+            competition_id: getInputValue('competition'),
+            status: 'Active',
+            height: null,
+            measurements: null,
+            talents: getInputValue('talents'),
+            special_awards: getInputValue('special_awards')
         };
 
-        fetch('http://localhost:3002/add-participant', {
+        fetch(`${API_URL}/add-participant`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(participantData)
         })
-        .then(response => response.json())
+        .then(res => res.json())
         .then(data => {
             if (data.success) {
-                alert('Participant registered successfully!');
+                alert('Participant added with Active status successfully!');
                 showViewParticipants();
             } else {
-                alert('Error: ' + data.error);
+                alert('Error: ' + (data.error || 'Error adding participant'));
             }
         })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('Error registering participant');
-        });
+        .catch(() => alert('Error adding participant!'));
     };
 }
 
-// Quick registration for specific competition
+
 function registerParticipantForCompetition(competitionId) {
     showAddParticipantForm(competitionId);
 }
-// Continue from where staff-app.js was cut off...
 
-// Enhanced View Participants with Filtering
+// =====================================================
+// PARTICIPANTS - VIEW & MANAGE
+// =====================================================
+
 function showViewParticipants() {
-    document.getElementById("content").innerHTML = `
-        <h2>👥 Manage Participants</h2>
-        
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>Manage Participants</h2>
         <div style="margin-bottom: 30px;">
-            <button onclick="showAddParticipantForm()" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600;">
-                ➕ Add New Participant
-            </button>
+            <button onclick="showAddParticipantForm()" class="card-button">Add New Participant</button>
         </div>
-        
         <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
             <div style="display: grid; grid-template-columns: auto auto auto 1fr; gap: 15px; align-items: center;">
                 <label for="filterCompetition" style="font-weight: 600; color: #800020;">Filter by Competition:</label>
-                <select id="filterCompetition" onchange="filterParticipants()" style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px;">
+                <select id="filterCompetition" onchange="filterParticipants()" class="filter-select">
                     <option value="">All Competitions</option>
                 </select>
-                
-                <label for="filterStatus" style="font-weight: 600; color: #800020;">Registration Status:</label>
-                <select id="filterStatus" onchange="filterParticipants()" style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px;">
+                <label for="filterStatus" style="font-weight: 600; color: #800020;">Status:</label>
+                <select id="filterStatus" onchange="filterParticipants()" class="filter-select">
                     <option value="">All Statuses</option>
-                    <option value="paid">Paid</option>
-                    <option value="pending">Pending</option>
-                    <option value="waived">Waived</option>
+                    <option value="Active">Active</option>
+                    <option value="done">Done</option>
+                    
                 </select>
             </div>
         </div>
-        
-        <div id="participantsList">
-            <div style="text-align: center; padding: 40px;">
-                <div style="font-size: 24px;">⏳</div>
-                <p>Loading participants...</p>
-            </div>
-        </div>
-    `;
+        <div id="participantsList"><div class="loading">Loading participants...</div></div>
+    `);
 
-    // Populate competition filter dropdown
-    fetch('http://localhost:3002/competitions')
-    .then(response => response.json())
-    .then(competitions => {
-        const filterSelect = document.getElementById("filterCompetition");
-        competitions.forEach(competition => {
-            const option = document.createElement("option");
-            option.value = competition.competition_id;
-            option.textContent = `${competition.competition_name} ${competition.is_pageant ? '👑' : '🎪'}`;
-            filterSelect.appendChild(option);
-        });
-    });
-
-    // Load and display participants
-    loadParticipants();
+    Promise.all([
+        fetchData(`${API_URL}/competitions`),
+        fetchData(`${API_URL}/participants`)
+    ])
+    .then(([competitions, participants]) => {
+        populateCompetitionFilter(competitions);
+        allParticipants = participants;
+        displayParticipants(participants);
+    })
+    .catch(() => showError('participantsList', 'Error loading participants'));
 }
 
-function loadParticipants(competitionId = '', status = '') {
-    let url = 'http://localhost:3002/participants';
-    if (competitionId) {
-        url = `http://localhost:3002/participants/${competitionId}`;
-    }
-
-    fetch(url)
-    .then(response => response.json())
-    .then(participants => {
-        // Filter by status if specified
-        let filteredParticipants = participants;
-        if (status) {
-            filteredParticipants = participants.filter(p => p.status === status);
-        }
-        
-        let participantsHtml = '';
-        
-        if (filteredParticipants.length === 0) {
-            participantsHtml = `
-                <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">👥</div>
-                    <h3>No Participants Found</h3>
-                    <p>No participants match the current filters. Try adjusting your search criteria.</p>
-                    <button onclick="showAddParticipantForm()" class="card-button">Add First Participant</button>
-                </div>
-            `;
-        } else {
-            participantsHtml = '<div style="display: grid; gap: 20px;">';
-            
-            filteredParticipants.forEach(participant => {
-                const statusColor = participant.status === 'done' ? '#28a745' : 
-                   participant.status === 'ongoing' ? '#ffc107' : '#dc3545';
-                const eventIcon = participant.is_pageant ? '👑' : '🎪';
-                
-                participantsHtml += `
-                    <div class="dashboard-card" style="text-align: left;">
-                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
-                            <h3>${participant.participant_name} ${eventIcon}</h3>
-                            <span style="padding: 6px 12px; border-radius: 15px; font-size: 12px; font-weight: bold; background: ${statusColor}; color: white;">
-                                ${participant.status.toUpperCase()}
-                            </span>
-                        </div>
-                        
-                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 15px 0;">
-                            <div>
-                                <p><strong>Age:</strong> ${participant.age}</p>
-                                <p><strong>Gender:</strong> ${participant.gender}</p>
-                                <p><strong>Email:</strong> ${participant.email}</p>
-                            </div>
-                            <div>
-                                <p><strong>Competition:</strong> ${participant.competition_name}</p>
-                                <p><strong>Event Type:</strong> ${participant.type_name || participant.category} ${eventIcon}</p>
-                                <p><strong>Performance:</strong> ${participant.performance_title || 'N/A'}</p>
-                            </div>
-                            <div>
-                                <p><strong>School/Org:</strong> ${participant.school_organization || 'N/A'}</p>
-                                <p><strong>Registered:</strong> ${participant.registration_date ? new Date(participant.registration_date).toLocaleDateString() : 'N/A'}</p>
-                                ${participant.is_pageant && participant.height ? `<p><strong>Height:</strong> ${participant.height}</p>` : ''}
-                            </div>
-                        </div>
-                        
-                        ${participant.performance_description ? `
-                            <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
-                                <strong>Performance Description:</strong><br>
-                                <span style="color: #666;">${participant.performance_description}</span>
-                            </div>
-                        ` : ''}
-                        
-                        ${participant.is_pageant && (participant.talents || participant.special_awards) ? `
-                            <div style="background: #fff0f5; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
-                                ${participant.talents ? `<p><strong>Talents:</strong> <span style="color: #666;">${participant.talents}</span></p>` : ''}
-                                ${participant.special_awards ? `<p><strong>Awards:</strong> <span style="color: #666;">${participant.special_awards}</span></p>` : ''}
-                            </div>
-                        ` : ''}
-                        
-                        <div style="margin-top: 15px;">
-                            <button onclick="viewParticipantDetails(${participant.participant_id})" style="margin: 2px; padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">👁️ View Details</button>
-                            <button onclick="editParticipant(${participant.participant_id})" style="margin: 2px; padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer;">✏️ Edit</button>
-                            <button onclick="updateRegistrationStatus(${participant.participant_id}, '${participant.status}')" style="margin: 2px; padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">💰 Update Status</button>
-                        </div>
-                    </div>
-                `;
-            });
-            
-            participantsHtml += '</div>';
-        }
-
-        document.getElementById("participantsList").innerHTML = participantsHtml;
-    })
-    .catch(error => {
-        console.error('Error fetching participants:', error);
-        document.getElementById("participantsList").innerHTML = '<p class="alert alert-error">Error loading participants.</p>';
+function populateCompetitionFilter(competitions) {
+    const filterSelect = document.getElementById('filterCompetition');
+    if (!filterSelect) return;
+    
+    competitions.forEach(competition => {
+        const option = document.createElement('option');
+        option.value = competition.competition_id;
+        option.textContent = competition.competition_name;
+        filterSelect.appendChild(option);
     });
 }
 
 function filterParticipants() {
-    const competitionId = document.getElementById("filterCompetition").value;
-    const status = document.getElementById("filterStatus").value;
-    loadParticipants(competitionId, status);
+    const competitionId = document.getElementById('filterCompetition').value;
+    const status = document.getElementById('filterStatus').value;
+    
+    let filtered = allParticipants;
+    
+    if (competitionId) {
+        filtered = filtered.filter(p => p.competition_id == competitionId);
+    }
+    
+ if (status) {
+   filtered = filtered.filter(p => (p.status || '').toLowerCase() === status.toLowerCase());
+ }
+    
+    displayParticipants(filtered);
 }
 
-// View Participant Details
-function viewParticipantDetails(id) {
-    fetch(`http://localhost:3002/participant/${id}`)
-    .then(response => response.json())
-    .then(participant => {
-       const statusColor = participant.status === 'done' ? '#28a745' : 
-                   participant.status === 'ongoing' ? '#ffc107' : '#dc3545';
-        const eventIcon = participant.is_pageant ? '👑' : '🎪';
+function displayParticipants(participants) {
+    if (!participants || participants.length === 0) {
+        document.getElementById('participantsList').innerHTML = `
+            <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
+                <h3>No Participants Found</h3>
+                <p>No participants match the current filters.</p>
+                <button onclick="showAddParticipantForm()" class="card-button">Add First Participant</button>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '<div style="display: grid; gap: 20px;">';
+    
+    participants.forEach(participant => {
+        const statusColor = getStatusColor(participant.status);
         
-        let detailsHtml = `
-            <h2>👁️ Participant Details</h2>
-            <div class="dashboard-card" style="text-align: left; max-width: 800px; margin: 0 auto;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h3>${participant.participant_name} ${eventIcon}</h3>
-                    <span style="padding: 8px 16px; border-radius: 15px; font-weight: bold; background: ${statusColor}; color: white;">
+        html += `
+            <div class="dashboard-card" style="text-align: left;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                    <h3>${sanitizeHTML(participant.participant_name)}</h3>
+                    <span style="padding: 6px 12px; border-radius: 15px; font-size: 12px; font-weight: bold; background: ${statusColor}; color: white;">
                         ${participant.status.toUpperCase()}
                     </span>
                 </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 20px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 15px 0;">
                     <div>
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Basic Information</h4>
-                        <p><strong>Email:</strong> ${participant.email}</p>
-                        <p><strong>Phone:</strong> ${participant.phone || 'Not provided'}</p>
                         <p><strong>Age:</strong> ${participant.age}</p>
                         <p><strong>Gender:</strong> ${participant.gender}</p>
-                        <p><strong>School/Organization:</strong> ${participant.school_organization || 'Not specified'}</p>
+                        <p><strong>Email:</strong> ${sanitizeHTML(participant.email)}</p>
                     </div>
                     <div>
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Competition Details</h4>
-                        <p><strong>Competition:</strong> ${participant.competition_name}</p>
-                        <p><strong>Event Type:</strong> ${participant.type_name || participant.category} ${eventIcon}</p>
-                        <p><strong>Registration Status:</strong> <span style="color: ${statusColor}; font-weight: bold;">${participant.status.toUpperCase()}</span></p>
-                        <p><strong>Registration Date:</strong> ${participant.registration_date ? new Date(participant.registration_date).toLocaleDateString() : 'Not recorded'}</p>
+                        <p><strong>Competition:</strong> ${sanitizeHTML(participant.competition_name)}</p>
+                        <p><strong>Event Type:</strong> ${sanitizeHTML(participant.type_name) || 'N/A'}</p>
+                        <p><strong>Performance:</strong> ${sanitizeHTML(participant.performance_title) || 'N/A'}</p>
+                    </div>
+                    <div>
+                        <p><strong>School/Org:</strong> ${sanitizeHTML(participant.school_organization) || 'N/A'}</p>
+                        ${participant.height ? `<p><strong>Height:</strong> ${sanitizeHTML(participant.height)}</p>` : ''}
                     </div>
                 </div>
-                
-                <div style="margin-top: 25px;">
-                    <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Performance Information</h4>
-                    <p><strong>Performance Title:</strong> ${participant.performance_title || 'Not specified'}</p>
-                    <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 10px;">
+                ${participant.performance_description ? `
+                    <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
                         <strong>Performance Description:</strong><br>
-                        ${participant.performance_description || 'No description provided'}
+                        <span style="color: #666;">${sanitizeHTML(participant.performance_description)}</span>
                     </div>
+                ` : ''}
+                <div style="margin-top: 15px;">
+                    <button onclick="viewParticipantDetails(${participant.participant_id})" class="card-button">View Details</button>
+                   <button onclick="editParticipantById(${participant.participant_id})" class="card-button">Edit</button>
+
+                    <button onclick="updateRegistrationStatus(${participant.participant_id}, '${participant.status}')" class="card-button">Update Status</button>
                 </div>
-        `;
-        
-        // Add pageant specific information if applicable
-        if (participant.is_pageant) {
-            detailsHtml += `
-                <div style="margin-top: 25px;">
-                    <h4 style="color: #ff69b4; border-bottom: 1px solid #ff69b4; padding-bottom: 5px;">👑 Pageant Information</h4>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                        <div>
-                            <p><strong>Height:</strong> ${participant.height || 'Not provided'}</p>
-                            <p><strong>Measurements:</strong> ${participant.measurements || 'Not provided'}</p>
-                        </div>
-                        <div>
-                            <p><strong>Special Talents:</strong></p>
-                            <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 5px;">
-                                ${participant.talents || 'Not specified'}
-                            </div>
-                        </div>
-                    </div>
-                    <div style="margin-top: 15px;">
-                        <p><strong>Awards & Achievements:</strong></p>
-                        <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 5px;">
-                            ${participant.special_awards || 'Not specified'}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-        
-        detailsHtml += `
-            </div>
-            <br>
-            <div style="text-align: center;">
-                <button onclick="showViewParticipants()" style="padding: 12px 20px; background: #6c757d; color: white; border: none; border-radius: 8px; cursor: pointer; margin-right: 10px;">← Back to Participants</button>
-                <button onclick="editParticipant(${participant.participant_id})" class="card-button">✏️ Edit Participant</button>
-                <button onclick="updateRegistrationStatus(${participant.participant_id}, '${participant.status}')" class="card-button" style="margin-left: 10px;">💰 Update Status</button>
             </div>
         `;
-        
-        document.getElementById("content").innerHTML = detailsHtml;
-    })
-    .catch(error => {
-        console.error('Error fetching participant details:', error);
-        alert('Error loading participant details');
     });
+    
+    html += '</div>';
+    document.getElementById('participantsList').innerHTML = html;
 }
 
-// Update Registration Status
-function updateRegistrationStatus(participantId, currentStatus) {
-    const statusOptions = {
-        'pending': 'paid',
-        'paid': 'waived',
-        'waived': 'pending'
-    };
+function viewParticipantDetails(id) {
+    clearAllIntervals();
     
-    const nextStatus = statusOptions[currentStatus];
-    const confirmMessage = `Change registration status to "${nextStatus.toUpperCase()}"?`;
-    
-    if (confirm(confirmMessage)) {
-        fetch(`http://localhost:3002/update-participant-status/${participantId}`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ status: nextStatus })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert(`Registration status updated to ${nextStatus.toUpperCase()}`);
-                showViewParticipants();
-            } else {
-                alert('Error: ' + data.error);
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('Error updating registration status');
-        });
-    }
-}
-
-// View Judges (Staff can view but not edit)
-function showViewJudges() {
-    document.getElementById("content").innerHTML = `
-        <h2>⚖️ View Judges</h2>
-        <p style="margin-bottom: 20px;">View judge assignments and expertise areas.</p>
-        
-        <div id="judgesList">
-            <div style="text-align: center; padding: 40px;">
-                <div style="font-size: 24px;">⏳</div>
-                <p>Loading judges...</p>
-            </div>
-        </div>
-    `;
-
-    fetch('http://localhost:3002/judges')
-    .then(response => response.json())
-    .then(judges => {
-        let judgesHtml = '';
-        
-        if (judges.length === 0) {
-            judgesHtml = `
-                <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">⚖️</div>
-                    <h3>No Judges Assigned</h3>
-                    <p>Contact the administrator to add judges to competitions.</p>
-                </div>
-            `;
-        } else {
-            judgesHtml = '<div style="display: grid; gap: 20px;">';
+    fetchData(`${API_URL}/participant/${id}`)
+        .then(participant => {
+            const statusColor = getStatusColor(participant.status);
             
-            judges.forEach(judge => {
-                const eventIcon = judge.is_pageant ? '👑' : '🎪';
-                
-                judgesHtml += `
-                    <div class="dashboard-card" style="text-align: left;">
-                        <h3>⚖️ ${judge.judge_name}</h3>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 15px 0;">
+            let html = `
+                <h2>Participant Details</h2>
+                <div class="dashboard-card" style="text-align: left; max-width: 800px; margin: 0 auto;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3>${sanitizeHTML(participant.participant_name)}</h3>
+                        <span style="padding: 8px 16px; border-radius: 15px; font-weight: bold; background: ${statusColor}; color: white;">
+                            ${participant.status.toUpperCase()}
+                        </span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 20px;">
+                        <div>
+                            <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Basic Information</h4>
+                            <p><strong>Email:</strong> ${sanitizeHTML(participant.email)}</p>
+                            <p><strong>Phone:</strong> ${sanitizeHTML(participant.phone) || 'Not provided'}</p>
+                            <p><strong>Age:</strong> ${participant.age}</p>
+                            <p><strong>Gender:</strong> ${participant.gender}</p>
+                            <p><strong>School/Organization:</strong> ${sanitizeHTML(participant.school_organization) || 'Not specified'}</p>
+                        </div>
+                        <div>
+                            <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Competition Details</h4>
+                            <p><strong>Competition:</strong> ${sanitizeHTML(participant.competition_name)}</p>
+                            <p><strong>Event Type:</strong> ${sanitizeHTML(participant.type_name) || 'N/A'}</p>
+                            <p><strong>Status:</strong> <span style="color: ${statusColor}; font-weight: bold;">${participant.status.toUpperCase()}</span></p>
+                        </div>
+                    </div>
+                    <div style="margin-top: 25px;">
+                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Performance Information</h4>
+                        <p><strong>Performance Title:</strong> ${sanitizeHTML(participant.performance_title) || 'Not specified'}</p>
+                        <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 10px;">
+                            <strong>Description:</strong><br>${sanitizeHTML(participant.performance_description) || 'No description provided'}
+                        </div>
+                    </div>
+            `;
+            
+            if (participant.is_pageant) {
+                html += `
+                    <div style="margin-top: 25px;">
+                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Pageant Information</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                             <div>
-                                <p><strong>Email:</strong> ${judge.email}</p>
-                                <p><strong>Phone:</strong> ${judge.phone || 'Not provided'}</p>
-                                <p><strong>Experience:</strong> ${judge.experience_years} years</p>
+                                <p><strong>Height:</strong> ${sanitizeHTML(participant.height) || 'Not provided'}</p>
+                                <p><strong>Contestant Number:</strong> ${sanitizeHTML(participant.contestant_number) || 'Not assigned'}</p>
                             </div>
                             <div>
-                                <p><strong>Competition:</strong> ${judge.competition_name || 'Not assigned'}</p>
-                                <p><strong>Event Type:</strong> ${judge.type_name ? `${judge.type_name} ${eventIcon}` : 'N/A'}</p>
-                                <p><strong>Username:</strong> ${judge.username || 'Not set'}</p>
-                            </div>
-                            <div>
-                                <p><strong>Expertise:</strong></p>
-                                <div style="background: #f9f9f9; padding: 8px; border-radius: 4px; font-size: 14px;">
-                                    ${judge.expertise || 'Not specified'}
+                                <p><strong>Special Talents:</strong></p>
+                                <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 5px;">
+                                    ${sanitizeHTML(participant.talents) || 'Not specified'}
                                 </div>
                             </div>
                         </div>
-                        
-                        ${judge.credentials ? `
+                        ${participant.special_awards ? `
                             <div style="margin-top: 15px;">
-                                <p><strong>Credentials:</strong></p>
-                                <div style="background: #e7f3ff; padding: 10px; border-radius: 5px; font-size: 14px;">
-                                    ${judge.credentials}
+                                <p><strong>Awards & Achievements:</strong></p>
+                                <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 5px;">
+                                    ${sanitizeHTML(participant.special_awards)}
                                 </div>
                             </div>
                         ` : ''}
-                        
-                        <div style="margin-top: 20px;">
-                            <button onclick="viewJudgeDetails(${judge.judge_id})" style="margin: 2px; padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">👁️ View Details</button>
-                        </div>
                     </div>
                 `;
-            });
+            }
             
-            judgesHtml += '</div>';
-        }
+            html += `
+                </div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="showViewParticipants()" class="secondary">Back to Participants</button>
+                   <button onclick="editParticipantById(${participant.participant_id})" class="card-button">Edit Participant</button>
 
-        document.getElementById("judgesList").innerHTML = judgesHtml;
-    })
-    .catch(error => {
-        console.error('Error loading judges:', error);
-        document.getElementById("judgesList").innerHTML = '<p class="alert alert-error">Error loading judges.</p>';
+                    <button onclick="updateRegistrationStatus(${participant.participant_id}, '${participant.status}')" class="card-button">Update Status</button>
+                </div>
+            `;
+            
+            setContent(html);
+        })
+        .catch(() => showNotification('Error loading participant details', 'error'));
+}
+
+function updateRegistrationStatus(participantId, currentStatus) {
+    // Only two states in Staff: ACTIVE <-> DONE
+    const s = String(currentStatus || '').toLowerCase();
+    const nextStatus = (s === 'done') ? 'active' : 'done';
+
+    if (confirm(`Change status to "${nextStatus.toUpperCase()}"?`)) {
+        putData(`${API_URL}/update-participant-status/${participantId}`, { status: nextStatus })
+            .then(data => {
+                if (data.success) {
+                    showNotification(`Status updated to ${nextStatus.toUpperCase()}`, 'success');
+                    setTimeout(() => showViewParticipants(), 600);
+                } else {
+                    showNotification(data.error || 'Error updating status', 'error');
+                }
+            })
+            .catch(() => showNotification('Error updating status', 'error'));
+    }
+}
+
+
+// =====================================================
+// SHOW EDIT PARTICIPANT FORM (Admin-style)
+// =====================================================
+function showEditParticipantForm(participant) {
+    setContent(`
+        <form id="editParticipantForm">
+            <h2>Edit Participant</h2>
+
+            <label for="participant_name">Full Name</label>
+            <input type="text" id="participant_name" value="${participant.participant_name || ''}" required>
+
+            <label for="contestant_number">Contestant Number</label>
+            <input type="text" id="contestant_number" value="${participant.contestant_number || ''}" required>
+
+            <label for="photo_url">Photo URL</label>
+            <input type="url" id="photo_url" value="${participant.photo_url || ''}">
+
+            <label for="email">Email</label>
+            <input type="email" id="email" value="${participant.email || ''}">
+
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" value="${participant.phone || ''}">
+
+            <label for="age">Age</label>
+            <input type="number" id="age" value="${participant.age || ''}">
+
+            <label for="gender">Gender</label>
+            <select id="gender">
+                <option value="">Select gender</option>
+                <option value="Male" ${participant.gender === 'Male' ? 'selected' : ''}>Male</option>
+                <option value="Female" ${participant.gender === 'Female' ? 'selected' : ''}>Female</option>
+            </select>
+
+            <label for="school_organization">School / Organization</label>
+            <input type="text" id="school_organization" value="${participant.school_organization || ''}">
+
+            <label for="performance_title">Performance Title</label>
+            <input type="text" id="performance_title" value="${participant.performance_title || ''}">
+
+            <label for="performance_description">Performance Description</label>
+            <textarea id="performance_description">${participant.performance_description || ''}</textarea>
+
+            <label for="talents">Talent / Skills</label>
+            <input type="text" id="talents" value="${participant.talents || ''}">
+
+            <label for="special_awards">Awards / Achievements</label>
+            <textarea id="special_awards">${participant.special_awards || ''}</textarea>
+
+            <label for="competition">Select Competition</label>
+            <select id="competition"></select>
+
+            <button type="submit">Save Changes</button>
+        </form>
+    `);
+
+    loadCompetitionsDropdown("competition", participant.competition_id);
+    setupEditFormSubmit(participant.participant_id);
+}
+
+
+function getBasicInfoSectionWithValues(participant) {
+    return `
+        <div class="form-section">
+            <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin-bottom: 20px;">Basic Information</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div>
+                    <label for="participant_name">Participant Name:</label>
+                    <input type="text" id="participant_name" value="${sanitizeHTML(participant.participant_name)}" required>
+                </div>
+                <div>
+                    <label for="email">Email Address:</label>
+                    <input type="email" id="email" value="${sanitizeHTML(participant.email)}" required>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                <div>
+                    <label for="phone">Phone Number:</label>
+                    <input type="tel" id="phone" value="${sanitizeHTML(participant.phone) || ''}">
+                </div>
+                <div>
+                    <label for="age">Age:</label>
+                    <input type="number" id="age" min="1" max="120" value="${participant.age}" required>
+                </div>
+                <div>
+                    <label for="gender">Gender:</label>
+                    <select id="gender" required>
+                        <option value="male" ${participant.gender === 'male' ? 'selected' : ''}>Male</option>
+                        <option value="female" ${participant.gender === 'female' ? 'selected' : ''}>Female</option>
+                        <option value="other" ${participant.gender === 'other' ? 'selected' : ''}>Other</option>
+                    </select>
+                </div>
+            </div>
+            <label for="school_organization">School/Organization:</label>
+            <input type="text" id="school_organization" value="${sanitizeHTML(participant.school_organization) || ''}">
+        </div>
+    `;
+}
+
+function getCompetitionDetailsSectionWithValues(participant) {
+    return `
+        <div class="form-section">
+            <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin: 30px 0 20px 0;">Competition Details</h3>
+            <label for="competition">Select Competition:</label>
+            <select id="competition" required data-selected="${participant.competition_id}">
+                <option value="">Choose Competition</option>
+            </select>
+            <div style="display: grid; grid-template-columns: 1fr auto; gap: 15px;">
+                <div>
+                    <label for="performance_title">Performance Title:</label>
+                    <input type="text" id="performance_title" value="${sanitizeHTML(participant.performance_title) || ''}">
+                </div>
+                <div>
+                    <label for="status">Status:</label>
+                    <select id="status" required>
+                        <option value="pending" ${participant.status === 'pending' ? 'selected' : ''}>Pending</option>
+                        <option value="ongoing" ${participant.status === 'ongoing' ? 'selected' : ''}>Ongoing</option>
+                        <option value="done" ${participant.status === 'done' ? 'selected' : ''}>Done</option>
+                    </select>
+                </div>
+            </div>
+            <label for="performance_description">Performance Description:</label>
+            <textarea id="performance_description" rows="3">${sanitizeHTML(participant.performance_description) || ''}</textarea>
+        </div>
+    `;
+}
+
+function getAdditionalInfoSectionWithValues(participant) {
+    return `
+        <div class="form-section">
+            <h3 style="color: #800020; border-bottom: 2px solid #800020; padding-bottom: 10px; margin: 30px 0 20px 0;">Additional Information</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div>
+                    <label for="contestant_number">Contestant Number:</label>
+                    <input type="text" id="contestant_number" value="${sanitizeHTML(participant.contestant_number) || ''}">
+                </div>
+                <div>
+                    <label for="height">Height:</label>
+                    <input type="text" id="height" value="${sanitizeHTML(participant.height) || ''}">
+                </div>
+            </div>
+            <label for="photo_url">Photo URL:</label>
+            <input type="url" id="photo_url" value="${sanitizeHTML(participant.photo_url) || ''}">
+            <label for="talents">Special Talents:</label>
+            <textarea id="talents" rows="3">${sanitizeHTML(participant.talents) || ''}</textarea>
+            <label for="special_awards">Awards:</label>
+            <textarea id="special_awards" rows="3">${sanitizeHTML(participant.special_awards) || ''}</textarea>
+        </div>
+    `;
+}
+
+function populateCompetitionSelectForEdit(competitions) {
+    const competitionSelect = document.getElementById('competition');
+    if (!competitionSelect) return;
+    
+    const selectedId = competitionSelect.getAttribute('data-selected');
+    
+    competitions.forEach(competition => {
+        const option = document.createElement('option');
+        option.value = competition.competition_id;
+        option.textContent = `${competition.competition_name} (${competition.type_name})`;
+        if (competition.competition_id == selectedId) {
+            option.selected = true;
+        }
+        competitionSelect.appendChild(option);
     });
 }
 
-// View Judge Details
-function viewJudgeDetails(id) {
-    fetch(`http://localhost:3002/judge/${id}`)
-    .then(response => response.json())
-    .then(judge => {
-        const eventIcon = judge.is_pageant ? '👑' : '🎪';
-        
-        document.getElementById("content").innerHTML = `
-            <h2>👁️ Judge Details</h2>
-            <div class="dashboard-card" style="text-align: left; max-width: 700px; margin: 0 auto;">
-                <h3>⚖️ ${judge.judge_name}</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 20px;">
+function setupEditFormSubmit(participantId) {
+  const form = document.getElementById('editParticipantForm');
+  if (!form) return;
+
+  form.onsubmit = function (e) {
+    e.preventDefault();
+
+    // Read values
+    const name = getInputValue('participant_name')?.trim();
+    const email = getInputValue('email')?.trim();
+    const ageVal = getInputValue('age');
+    const genderVal = getInputValue('gender');
+    const compVal = getInputValue('competition');
+
+    // Normalize
+    const age = ageVal ? parseInt(ageVal, 10) : null;
+    const gender = (genderVal || '').toString().trim().toLowerCase(); // 'male' | 'female' | 'other'
+    const competition_id = compVal ? parseInt(compVal, 10) : null;
+
+    // Validate required fields (these are what the server requires)
+    if (!name || !email || !age || !gender || !competition_id) {
+      alert('Please complete Name, Email, Age, Gender, and Competition.');
+      return;
+    }
+
+    // Build payload
+    const participantData = {
+      participant_name: name,
+      contestant_number: getInputValue('contestant_number') || null,
+      photo_url: getInputValue('photo_url') || null,
+      email,
+      phone: getInputValue('phone') || null,
+      age,
+      gender, // send normalized lowercase
+      school_organization: getInputValue('school_organization') || null,
+      performance_title: getInputValue('performance_title') || null,
+      performance_description: getInputValue('performance_description') || '',
+      competition_id, // send as number
+      status: (getInputValue('status') || 'active'), // fallback to active
+      height: getInputValue('height') || null,
+      measurements: null,
+      talents: getInputValue('talents') || null,
+      special_awards: getInputValue('special_awards') || null
+    };
+
+    fetch(`${API_URL}/update-participant/${participantId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(participantData)
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          alert('Participant updated successfully!');
+          showViewParticipants();
+        } else {
+          alert('Error: ' + (data.error || 'Error updating participant'));
+        }
+      })
+      .catch(() => alert('Error updating participant!'));
+  };
+}
+
+
+// =====================================================
+// JUDGES
+// =====================================================
+
+function showViewJudges() {
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>View Judges</h2>
+        <p style="margin-bottom: 20px;">View judge assignments and expertise areas.</p>
+        <div id="judgesList"><div class="loading">Loading judges...</div></div>
+    `);
+
+    fetchData(`${API_URL}/judges`)
+        .then(displayJudges)
+        .catch(() => showError('judgesList', 'Error loading judges'));
+}
+
+function displayJudges(judges) {
+    if (!judges || judges.length === 0) {
+        document.getElementById('judgesList').innerHTML = createEmptyState('No Judges Assigned', 'Contact administrator to add judges');
+        return;
+    }
+
+    let html = '<div style="display: grid; gap: 20px;">';
+    
+    judges.forEach(judge => {
+        html += `
+            <div class="dashboard-card" style="text-align: left;">
+                <h3>${sanitizeHTML(judge.judge_name)}</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 15px 0;">
                     <div>
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Contact Information</h4>
-                        <p><strong>Email:</strong> ${judge.email}</p>
-                        <p><strong>Phone:</strong> ${judge.phone || 'Not provided'}</p>
-                        <p><strong>Username:</strong> ${judge.username || 'Not set'}</p>
+                        <p><strong>Email:</strong> ${sanitizeHTML(judge.email)}</p>
+                        <p><strong>Phone:</strong> ${sanitizeHTML(judge.phone) || 'Not provided'}</p>
                         <p><strong>Experience:</strong> ${judge.experience_years} years</p>
                     </div>
                     <div>
-                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Assignment Details</h4>
-                        <p><strong>Assigned Competition:</strong> ${judge.competition_name || 'Not assigned'}</p>
-                        <p><strong>Event Type:</strong> ${judge.type_name ? `${judge.type_name} ${eventIcon}` : 'N/A'}</p>
-                        <p><strong>Account Status:</strong> <span style="color: #28a745; font-weight: bold;">Active</span></p>
+                        <p><strong>Competition:</strong> ${sanitizeHTML(judge.competition_name) || 'Not assigned'}</p>
+                        <p><strong>Event Type:</strong> ${sanitizeHTML(judge.type_name) || 'N/A'}</p>
+                        <p><strong>Username:</strong> ${sanitizeHTML(judge.username) || 'Not set'}</p>
+                    </div>
+                    <div>
+                        <p><strong>Expertise:</strong></p>
+                        <div style="background: #f9f9f9; padding: 8px; border-radius: 4px; font-size: 14px;">
+                            ${sanitizeHTML(judge.expertise) || 'Not specified'}
+                        </div>
                     </div>
                 </div>
-                
-                <div style="margin-top: 25px;">
-                    <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Areas of Expertise</h4>
-                    <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 10px;">
-                        ${judge.expertise || 'No expertise specified'}
+                ${judge.credentials ? `
+                    <div style="margin-top: 15px;">
+                        <p><strong>Credentials:</strong></p>
+                        <div style="background: #e7f3ff; padding: 10px; border-radius: 5px; font-size: 14px;">
+                            ${sanitizeHTML(judge.credentials)}
+                        </div>
                     </div>
+                ` : ''}
+                <div style="margin-top: 20px;">
+                    <button onclick="viewJudgeDetails(${judge.judge_id})" class="card-button">View Details</button>
                 </div>
-                
-                <div style="margin-top: 25px;">
-                    <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Credentials & Qualifications</h4>
-                    <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 10px;">
-                        ${judge.credentials || 'No credentials provided'}
-                    </div>
-                </div>
-            </div>
-            <br>
-            <div style="text-align: center;">
-                <button onclick="showViewJudges()" style="padding: 12px 20px; background: #6c757d; color: white; border: none; border-radius: 8px; cursor: pointer;">← Back to Judges</button>
             </div>
         `;
-    })
-    .catch(error => {
-        console.error('Error fetching judge details:', error);
-        alert('Error loading judge details');
     });
+    
+    html += '</div>';
+    document.getElementById('judgesList').innerHTML = html;
 }
 
-// Enhanced Reports Function
+function viewJudgeDetails(id) {
+    clearAllIntervals();
+    
+    fetchData(`${API_URL}/judge/${id}`)
+        .then(judge => {
+            setContent(`
+                <h2>Judge Details</h2>
+                <div class="dashboard-card" style="text-align: left; max-width: 700px; margin: 0 auto;">
+                    <h3>${sanitizeHTML(judge.judge_name)}</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 20px;">
+                        <div>
+                            <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Contact Information</h4>
+                            <p><strong>Email:</strong> ${sanitizeHTML(judge.email)}</p>
+                            <p><strong>Phone:</strong> ${sanitizeHTML(judge.phone) || 'Not provided'}</p>
+                            <p><strong>Username:</strong> ${sanitizeHTML(judge.username) || 'Not set'}</p>
+                            <p><strong>Experience:</strong> ${judge.experience_years} years</p>
+                        </div>
+                        <div>
+                            <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Assignment Details</h4>
+                            <p><strong>Assigned Competition:</strong> ${sanitizeHTML(judge.competition_name) || 'Not assigned'}</p>
+                            <p><strong>Event Type:</strong> ${sanitizeHTML(judge.type_name) || 'N/A'}</p>
+                            <p><strong>Account Status:</strong> <span style="color: #28a745; font-weight: bold;">Active</span></p>
+                        </div>
+                    </div>
+                    <div style="margin-top: 25px;">
+                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Areas of Expertise</h4>
+                        <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 10px;">
+                            ${sanitizeHTML(judge.expertise) || 'No expertise specified'}
+                        </div>
+                    </div>
+                    <div style="margin-top: 25px;">
+                        <h4 style="color: #800020; border-bottom: 1px solid #800020; padding-bottom: 5px;">Credentials</h4>
+                        <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-top: 10px;">
+                            ${sanitizeHTML(judge.credentials) || 'No credentials provided'}
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="showViewJudges()" class="secondary">Back to Judges</button>
+                </div>
+            `);
+        })
+        .catch(() => showNotification('Error loading judge details', 'error'));
+}
+
+// =====================================================
+// REPORTS
+// =====================================================
+
 function showReports() {
-    document.getElementById("content").innerHTML = `
-        <h2>📊 Enhanced Reports & Analytics</h2>
-        
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>Reports & Analytics</h2>
         <div style="background: #e7f3ff; border: 2px solid #2196F3; border-radius: 8px; padding: 15px; margin: 20px 0;">
-            <strong>📈 Available Reports:</strong>
+            <strong>Available Reports:</strong>
             <p style="color: #1976d2; margin-top: 8px;">Generate comprehensive reports for competitions, participants, and registration status.</p>
         </div>
-        
-        <div id="reportsContent">
-            <div style="text-align: center; padding: 40px;">
-                <div style="font-size: 24px;">⏳</div>
-                <p>Loading report data...</p>
-            </div>
-        </div>
-    `;
+        <div id="reportsContent"><div class="loading">Loading report data...</div></div>
+    `);
 
-    // Load data for reports
     Promise.all([
-        fetch('http://localhost:3002/competitions').then(r => r.json()),
-        fetch('http://localhost:3002/participants').then(r => r.json()),
-        fetch('http://localhost:3002/judges').then(r => r.json())
+        fetchData(`${API_URL}/competitions`),
+        fetchData(`${API_URL}/participants`),
+        fetchData(`${API_URL}/judges`)
     ])
     .then(([competitions, participants, judges]) => {
         generateReports(competitions, participants, judges);
     })
-    .catch(error => {
-        console.error('Error loading report data:', error);
-        document.getElementById("reportsContent").innerHTML = '<p class="alert alert-error">Error loading report data.</p>';
-    });
+    .catch(() => showError('reportsContent', 'Error loading report data'));
 }
 
 function generateReports(competitions, participants, judges) {
-    // Calculate statistics
     const totalCompetitions = competitions.length;
     const totalParticipants = participants.length;
     const totalJudges = judges.length;
     
-    // Group participants by competition
     const participantsByCompetition = participants.reduce((acc, participant) => {
         if (!acc[participant.competition_id]) {
             acc[participant.competition_id] = [];
@@ -1171,7 +1339,6 @@ function generateReports(competitions, participants, judges) {
         return acc;
     }, {});
     
-    // Group by registration status
     const statusGroups = participants.reduce((groups, participant) => {
         if (!groups[participant.status]) {
             groups[participant.status] = [];
@@ -1180,83 +1347,101 @@ function generateReports(competitions, participants, judges) {
         return groups;
     }, {});
     
-    // Group by event type (pageant vs regular)
     const pageantParticipants = participants.filter(p => p.is_pageant).length;
     const regularParticipants = participants.filter(p => !p.is_pageant).length;
     
-    let reportsHtml = `
+    let html = `
         <div class="report-section">
-            <h3>📊 Overall Statistics</h3>
+            <h3>Overall Statistics</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
-                <div style="text-align: center; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 2px solid #800020;">
-                    <h4 style="color: #800020; font-size: 2em; margin-bottom: 10px;">${totalCompetitions}</h4>
-                    <p style="color: #666; font-weight: 600;">Total Competitions</p>
-                </div>
-                <div style="text-align: center; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 2px solid #28a745;">
-                    <h4 style="color: #28a745; font-size: 2em; margin-bottom: 10px;">${totalParticipants}</h4>
-                    <p style="color: #666; font-weight: 600;">Total Participants</p>
-                </div>
-                <div style="text-align: center; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 2px solid #17a2b8;">
-                    <h4 style="color: #17a2b8; font-size: 2em; margin-bottom: 10px;">${totalJudges}</h4>
-                    <p style="color: #666; font-weight: 600;">Total Judges</p>
-                </div>
+                ${createStatCard(totalCompetitions, 'Total Competitions', '#800020')}
+                ${createStatCard(totalParticipants, 'Total Participants', '#28a745')}
+                ${createStatCard(totalJudges, 'Total Judges', '#17a2b8')}
             </div>
         </div>
         
         <div class="report-section">
-            <h3>💰 Registration Status Breakdown</h3>
+            <h3>Registration Status Breakdown</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                ${generateStatusCards(statusGroups, totalParticipants)}
+            </div>
+        </div>
+        
+        <div class="report-section">
+            <h3>Event Type Distribution</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                ${createEventTypeCard(pageantParticipants, 'Beauty Pageant Participants', totalParticipants, '#800020')}
+                ${createEventTypeCard(regularParticipants, 'Performance Event Participants', totalParticipants, '#17a2b8')}
+            </div>
+        </div>
+        
+        <div class="report-section">
+            <h3>Competition Details</h3>
+            ${generateCompetitionDetails(competitions, participantsByCompetition)}
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="showDashboard()" class="secondary">Back to Dashboard</button>
+        </div>
     `;
     
-    Object.entries(statusGroups).forEach(([status, participants]) => {
-        const statusColor = status === 'paid' ? '#28a745' : status === 'pending' ? '#ffc107' : '#17a2b8';
-        const percentage = totalParticipants > 0 ? ((participants.length / totalParticipants) * 100).toFixed(1) : 0;
+    document.getElementById('reportsContent').innerHTML = html;
+}
+
+function createStatCard(value, label, color) {
+    return `
+        <div style="text-align: center; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 2px solid ${color};">
+            <h4 style="color: ${color}; font-size: 2em; margin-bottom: 10px;">${value}</h4>
+            <p style="color: #666; font-weight: 600;">${label}</p>
+        </div>
+    `;
+}
+
+function generateStatusCards(statusGroups, totalParticipants) {
+    let html = '';
+    
+    Object.entries(statusGroups).forEach(([status, statusParticipants]) => {
+        const statusColor = getStatusColor(status);
+        const percentage = totalParticipants > 0 ? ((statusParticipants.length / totalParticipants) * 100).toFixed(1) : 0;
         
-        reportsHtml += `
+        html += `
             <div style="background: white; border: 2px solid ${statusColor}; border-radius: 8px; padding: 15px; text-align: center;">
-                <h4 style="color: ${statusColor}; font-size: 1.5em;">${participants.length}</h4>
+                <h4 style="color: ${statusColor}; font-size: 1.5em;">${statusParticipants.length}</h4>
                 <p style="font-weight: 600; text-transform: uppercase;">${status}</p>
                 <p style="color: #666; font-size: 14px;">${percentage}% of total</p>
             </div>
         `;
     });
     
-    reportsHtml += `
-            </div>
+    return html;
+}
+
+function createEventTypeCard(count, label, total, color) {
+    const percentage = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
+    
+    return `
+        <div style="background: white; border: 2px solid ${color}; border-radius: 8px; padding: 20px; text-align: center;">
+            <h4 style="color: ${color}; font-size: 2em;">${count}</h4>
+            <p style="font-weight: 600;">${label}</p>
+            <p style="color: #666; font-size: 14px;">${percentage}% of total</p>
         </div>
-        
-        <div class="report-section">
-            <h3>🎭 Event Type Distribution</h3>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                <div style="background: white; border: 2px solid #ff69b4; border-radius: 8px; padding: 20px; text-align: center;">
-                    <h4 style="color: #ff69b4; font-size: 2em;">👑 ${pageantParticipants}</h4>
-                    <p style="font-weight: 600;">Beauty Pageant Participants</p>
-                    <p style="color: #666; font-size: 14px;">${totalParticipants > 0 ? ((pageantParticipants / totalParticipants) * 100).toFixed(1) : 0}% of total</p>
-                </div>
-                <div style="background: white; border: 2px solid #17a2b8; border-radius: 8px; padding: 20px; text-align: center;">
-                    <h4 style="color: #17a2b8; font-size: 2em;">🎪 ${regularParticipants}</h4>
-                    <p style="font-weight: 600;">Performance Event Participants</p>
-                    <p style="color: #666; font-size: 14px;">${totalParticipants > 0 ? ((regularParticipants / totalParticipants) * 100).toFixed(1) : 0}% of total</p>
-                </div>
-            </div>
-        </div>
-        
-        <div class="report-section">
-            <h3> Competition Details</h3>
     `;
+}
+
+function generateCompetitionDetails(competitions, participantsByCompetition) {
+    let html = '';
     
     competitions.forEach(competition => {
         const competitionParticipants = participantsByCompetition[competition.competition_id] || [];
-        const eventIcon = competition.is_pageant ? '👑' : '🎪';
-        const typeColor = competition.is_pageant ? '#ff69b4' : '#17a2b8';
+        const typeColor = competition.is_pageant ? '#800020' : '#17a2b8';
         
-        reportsHtml += `
+        html += `
             <div style="background: white; border-left: 5px solid ${typeColor}; padding: 15px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-                <h4 style="color: #800020;">${competition.competition_name} ${eventIcon}</h4>
+                <h4 style="color: #800020;">${sanitizeHTML(competition.competition_name)}</h4>
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-top: 10px;">
                     <div>
-                        <p><strong>Event Type:</strong> ${competition.type_name || competition.category}</p>
-                        <p><strong>Date:</strong> ${competition.competition_date}</p>
+                        <p><strong>Event Type:</strong> ${sanitizeHTML(competition.type_name) || 'N/A'}</p>
+                        <p><strong>Date:</strong> ${formatDate(competition.competition_date)}</p>
                     </div>
                     <div>
                         <p><strong>Participants:</strong> ${competitionParticipants.length}</p>
@@ -1270,251 +1455,532 @@ function generateReports(competitions, participants, judges) {
         `;
     });
     
-    reportsHtml += `
-        </div>
-        
-        <div style="text-align: center; margin-top: 30px;">
-            <button onclick="exportReportData()" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; margin-right: 10px;">
-                📊 Export Report Data
-            </button>
-            <button onclick="showDashboard()" class="secondary">← Back to Dashboard</button>
-        </div>
-    `;
-    
-    document.getElementById("reportsContent").innerHTML = reportsHtml;
+    return html;
 }
 
-// Export Report Data (placeholder function)
-function exportReportData() {
-    alert('Export functionality will generate CSV/PDF reports with detailed statistics.');
-}
+// =====================================================
+// SCORING OVERVIEW
+// =====================================================
 
-// Scoring Overview Function
 function showScoringOverview() {
-    document.getElementById("content").innerHTML = `
-        <h2>📋 Competition Scoring Overview</h2>
-        
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>Competition Scoring Overview</h2>
         <div style="margin-bottom: 30px;">
             <label for="scoringCompetition" style="font-weight: 600; color: #800020; margin-right: 10px;">Select Competition:</label>
-            <select id="scoringCompetition" onchange="loadScoringOverview()" style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px;">
+            <select id="scoringCompetition" onchange="loadScoringOverview()" class="filter-select">
                 <option value="">Choose Competition</option>
             </select>
         </div>
-        
         <div id="scoringContent">
-            <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                <div style="font-size: 48px; margin-bottom: 20px;">📋</div>
-                <h3>Select a Competition</h3>
-                <p>Choose a competition to view scoring progress and judge assignments.</p>
-            </div>
+            ${createEmptyState('Select a Competition', 'Choose a competition to view scoring progress')}
         </div>
-    `;
+    `);
 
-    // Load competitions for dropdown
-    fetch('http://localhost:3002/competitions')
-    .then(response => response.json())
-    .then(competitions => {
-        const select = document.getElementById("scoringCompetition");
-        competitions.forEach(competition => {
-            const option = document.createElement("option");
-            option.value = competition.competition_id;
-            option.textContent = `${competition.competition_name} ${competition.is_pageant ? '👑' : '🎪'}`;
-            select.appendChild(option);
+    fetchData(`${API_URL}/competitions`)
+        .then(competitions => {
+            const select = document.getElementById('scoringCompetition');
+            competitions.forEach(competition => {
+                const option = document.createElement('option');
+                option.value = competition.competition_id;
+                option.textContent = competition.competition_name;
+                select.appendChild(option);
+            });
         });
-    })
-    .catch(error => {
-        console.error('Error loading competitions:', error);
-    });
 }
 
 function loadScoringOverview() {
-    const competitionId = document.getElementById("scoringCompetition").value;
+    const competitionId = document.getElementById('scoringCompetition').value;
+    
     if (!competitionId) {
-        document.getElementById("scoringContent").innerHTML = `
-            <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                <div style="font-size: 48px; margin-bottom: 20px;">📋</div>
-                <h3>Select a Competition</h3>
-                <p>Choose a competition to view scoring progress.</p>
-            </div>
-        `;
+        document.getElementById('scoringContent').innerHTML = createEmptyState('Select a Competition', 'Choose a competition to view scoring progress');
         return;
     }
 
-    document.getElementById("scoringContent").innerHTML = `
-        <div style="text-align: center; padding: 40px;">
-            <div style="font-size: 24px;">⏳</div>
-            <p>Loading scoring overview...</p>
-        </div>
-    `;
+    document.getElementById('scoringContent').innerHTML = '<div class="loading">Loading scoring overview...</div>';
 
-    // Load competition data, participants, judges, and scores
     Promise.all([
-        fetch(`http://localhost:3002/competition/${competitionId}`).then(r => r.json()),
-        fetch(`http://localhost:3002/participants/${competitionId}`).then(r => r.json()),
-        fetch(`http://localhost:3002/judges`).then(r => r.json()),
-        fetch(`http://localhost:3002/overall-scores/${competitionId}`).then(r => r.json()).catch(() => [])
+        fetchData(`${API_URL}/competition/${competitionId}`),
+        fetchData(`${API_URL}/participants/${competitionId}`),
+        fetchData(`${API_URL}/judges`),
+        fetchData(`${API_URL}/overall-scores/${competitionId}`).catch(() => [])
     ])
     .then(([competition, participants, allJudges, scores]) => {
         const judges = allJudges.filter(j => j.competition_id == competitionId);
-        const eventIcon = competition.is_pageant ? '👑' : '🎪';
-        
-        // Calculate scoring progress
-        const totalPossibleScores = participants.length * judges.length;
-        const completedScores = scores.length;
-        const progressPercentage = totalPossibleScores > 0 ? ((completedScores / totalPossibleScores) * 100).toFixed(1) : 0;
-        
-        let overviewHtml = `
-            <div class="dashboard-card" style="text-align: left; margin-bottom: 20px;">
-                <h3>${competition.competition_name} ${eventIcon}</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin: 15px 0;">
-                    <div>
-                        <p><strong>Event Type:</strong> ${competition.type_name || competition.category}</p>
-                        <p><strong>Date:</strong> ${competition.competition_date}</p>
-                        <p><strong>Category:</strong> ${competition.is_pageant ? 'Beauty Pageant' : 'Performance Event'}</p>
+        displayScoringOverview(competition, participants, judges, scores);
+    })
+    .catch(() => showError('scoringContent', 'Error loading scoring overview'));
+}
+
+function displayScoringOverview(competition, participants, judges, scores) {
+    const totalPossibleScores = participants.length * judges.length;
+    const completedScores = scores.length;
+    const progressPercentage = totalPossibleScores > 0 ? ((completedScores / totalPossibleScores) * 100).toFixed(1) : 0;
+    
+    let html = `
+        <div class="dashboard-card" style="text-align: left; margin-bottom: 20px;">
+            <h3>${sanitizeHTML(competition.competition_name)}</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin: 15px 0;">
+                <div>
+                    <p><strong>Event Type:</strong> ${sanitizeHTML(competition.type_name)}</p>
+                    <p><strong>Date:</strong> ${formatDate(competition.competition_date)}</p>
+                    <p><strong>Category:</strong> ${competition.is_pageant ? 'Beauty Pageant' : 'Performance Event'}</p>
+                </div>
+                <div>
+                    <p><strong>Participants:</strong> ${participants.length}</p>
+                    <p><strong>Judges:</strong> ${judges.length}</p>
+                    <p><strong>Scoring Method:</strong> Multi-Criteria</p>
+                </div>
+                <div>
+                    <p><strong>Scoring Progress:</strong></p>
+                    <div style="background: #f0f0f0; height: 20px; border-radius: 10px; overflow: hidden; margin: 5px 0;">
+                        <div style="background: #28a745; height: 100%; width: ${progressPercentage}%; border-radius: 10px;"></div>
                     </div>
-                    <div>
-                        <p><strong>Participants:</strong> ${participants.length}</p>
-                        <p><strong>Judges:</strong> ${judges.length}</p>
-                        <p><strong>Scoring Method:</strong> Multi-Criteria</p>
-                    </div>
-                    <div>
-                        <p><strong>Scoring Progress:</strong></p>
-                        <div style="background: #f0f0f0; height: 20px; border-radius: 10px; overflow: hidden; margin: 5px 0;">
-                            <div style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); height: 100%; width: ${progressPercentage}%; border-radius: 10px;"></div>
-                        </div>
-                        <p style="font-size: 14px; color: #666;">${completedScores}/${totalPossibleScores} scores (${progressPercentage}%)</p>
-                    </div>
+                    <p style="font-size: 14px; color: #666;">${completedScores}/${totalPossibleScores} scores (${progressPercentage}%)</p>
                 </div>
             </div>
-            
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                <div class="dashboard-card" style="text-align: left;">
-                    <h4 style="color: #800020; margin-bottom: 15px;">👥 Participant Status</h4>
-        `;
+        </div>
         
-        if (participants.length === 0) {
-            overviewHtml += '<p style="color: #666;">No participants registered.</p>';
-        } else {
-            participants.forEach(participant => {
-                const participantScores = scores.filter(s => s.participant_id === participant.participant_id);
-                const judgeCount = judges.length;
-                const scoredByJudges = participantScores.length;
-                const statusColor = scoredByJudges === judgeCount ? '#28a745' : scoredByJudges > 0 ? '#ffc107' : '#dc3545';
-                const statusText = scoredByJudges === judgeCount ? 'Complete' : scoredByJudges > 0 ? 'Partial' : 'Pending';
-                
-                overviewHtml += `
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin: 5px 0; background: #f8f9fa; border-radius: 5px;">
-                        <span>${participant.participant_name}</span>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            ${generateParticipantStatus(participants, judges, scores)}
+            ${generateJudgeStatus(judges, participants, scores)}
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="viewCompetitionCriteria(${competition.competition_id})" class="card-button">View Criteria</button>
+            <button onclick="showDashboard()" class="secondary">Back to Dashboard</button>
+        </div>
+    `;
+    
+    document.getElementById('scoringContent').innerHTML = html;
+}
+
+function generateParticipantStatus(participants, judges, scores) {
+    let html = `
+        <div class="dashboard-card" style="text-align: left;">
+            <h4 style="color: #800020; margin-bottom: 15px;">Participant Status</h4>
+    `;
+    
+    if (participants.length === 0) {
+        html += '<p style="color: #666;">No participants registered.</p>';
+    } else {
+        participants.forEach(participant => {
+            const participantScores = scores.filter(s => s.participant_id === participant.participant_id);
+            const judgeCount = judges.length;
+            const scoredByJudges = participantScores.length;
+            const statusColor = scoredByJudges === judgeCount ? '#28a745' : scoredByJudges > 0 ? '#ffc107' : '#dc3545';
+            const statusText = scoredByJudges === judgeCount ? 'Complete' : scoredByJudges > 0 ? 'Partial' : 'Pending';
+            
+            html += `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin: 5px 0; background: #f8f9fa; border-radius: 5px;">
+                    <span>${sanitizeHTML(participant.participant_name)}</span>
+                    <span style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; background: ${statusColor}; color: white;">
+                        ${statusText} (${scoredByJudges}/${judgeCount})
+                    </span>
+                </div>
+            `;
+        });
+    }
+    
+    html += '</div>';
+    return html;
+}
+
+function generateJudgeStatus(judges, participants, scores) {
+    let html = `
+        <div class="dashboard-card" style="text-align: left;">
+            <h4 style="color: #800020; margin-bottom: 15px;">Judge Assignment</h4>
+    `;
+    
+    if (judges.length === 0) {
+        html += '<p style="color: #666;">No judges assigned.</p>';
+    } else {
+        judges.forEach(judge => {
+            const judgeScores = scores.filter(s => s.judge_id === judge.judge_id);
+            const participantCount = participants.length;
+            const scoredParticipants = judgeScores.length;
+            const statusColor = scoredParticipants === participantCount ? '#28a745' : scoredParticipants > 0 ? '#ffc107' : '#dc3545';
+            const statusText = scoredParticipants === participantCount ? 'Complete' : scoredParticipants > 0 ? 'In Progress' : 'Not Started';
+            
+            html += `
+                <div style="margin-bottom: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong>${sanitizeHTML(judge.judge_name)}</strong>
                         <span style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; background: ${statusColor}; color: white;">
-                            ${statusText} (${scoredByJudges}/${judgeCount})
+                            ${statusText}
                         </span>
                     </div>
-                `;
-            });
-        }
-        
-        overviewHtml += `
-                </div>
-                
-                <div class="dashboard-card" style="text-align: left;">
-                    <h4 style="color: #800020; margin-bottom: 15px;">⚖️ Judge Assignment</h4>
-        `;
-        
-        if (judges.length === 0) {
-            overviewHtml += '<p style="color: #666;">No judges assigned.</p>';
-        } else {
-            judges.forEach(judge => {
-                const judgeScores = scores.filter(s => s.judge_id === judge.judge_id);
-                const participantCount = participants.length;
-                const scoredParticipants = judgeScores.length;
-                const statusColor = scoredParticipants === participantCount ? '#28a745' : scoredParticipants > 0 ? '#ffc107' : '#dc3545';
-                const statusText = scoredParticipants === participantCount ? 'Complete' : scoredParticipants > 0 ? 'In Progress' : 'Not Started';
-                
-                overviewHtml += `
-                    <div style="margin-bottom: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <strong>${judge.judge_name}</strong>
-                            <span style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; background: ${statusColor}; color: white;">
-                                ${statusText}
-                            </span>
-                        </div>
-                        <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                            ${judge.expertise} • ${scoredParticipants}/${participantCount} participants scored
-                        </div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                        ${sanitizeHTML(judge.expertise)} • ${scoredParticipants}/${participantCount} participants scored
                     </div>
-                `;
-            });
-        }
-        
-        overviewHtml += `
                 </div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 30px;">
-                <button onclick="viewCompetitionCriteria(${competitionId}, '${competition.competition_name.replace(/'/g, "\\'")}')" class="card-button" style="margin-right: 10px;">📋 View Criteria</button>
-                <button onclick="showDashboard()" class="secondary">← Back to Dashboard</button>
-            </div>
-        `;
-        
-        document.getElementById("scoringContent").innerHTML = overviewHtml;
-    })
-    .catch(error => {
-        console.error('Error loading scoring overview:', error);
-        document.getElementById("scoringContent").innerHTML = '<p class="alert alert-error">Error loading scoring overview.</p>';
-    });
-}
-
-// Edit Participant (placeholder - would need full implementation)
-function editParticipant(participantId) {
-    alert('Edit participant functionality - this would open a form similar to the add participant form but pre-populated with existing data.');
-    // This would need to be implemented similar to showAddParticipantForm but with existing data loaded
-}
-
-// Initialize dashboard on load
-document.addEventListener('DOMContentLoaded', function() {
-    showDashboard();
-});
-
-// ==========================================
-// AJAX ENHANCEMENTS FOR STAFF DASHBOARD
-// ADD THIS AT THE BOTTOM OF staff-app.js
-// ==========================================
-
-// ==========================================
-// 1. OFFLINE/ONLINE DETECTION
-// ==========================================
-let isOnline = navigator.onLine;
-let offlineQueue = [];
-
-window.addEventListener('online', function() {
-    isOnline = true;
-    showNotification('You are back online!', 'success');
-    processOfflineQueue();
-});
-
-window.addEventListener('offline', function() {
-    isOnline = false;
-    showNotification('You are offline. Changes will be saved when connection is restored.', 'warning');
-});
-
-function processOfflineQueue() {
-    if (offlineQueue.length === 0) return;
-    showNotification(`Syncing ${offlineQueue.length} saved changes...`, 'info');
+            `;
+        });
+    }
     
-    const promises = offlineQueue.map(({ url, options }) => fetch(url, options));
-    Promise.all(promises)
-        .then(() => {
-            showNotification('All changes synced successfully!', 'success');
-            offlineQueue = [];
-        })
-        .catch(error => {
-            showNotification('Some changes failed to sync. Will retry...', 'warning');
+    html += '</div>';
+    return html;
+}
+
+// =====================================================
+// RANKINGS
+// =====================================================
+
+function showCompetitionRankings() {
+    clearAllIntervals();
+    
+    setContent(`
+        <h2>Competition Rankings</h2>
+        <div style="margin-bottom: 30px;">
+            <label for="rankingsCompetition" style="font-weight: 600; color: #800020; margin-right: 10px;">Select Competition:</label>
+            <select id="rankingsCompetition" onchange="loadCompetitionRankings()" class="filter-select">
+                <option value="">Choose Competition</option>
+            </select>
+            <button onclick="printRankings()" id="printBtn" style="display: none; margin-left: 15px;" class="card-button">
+                Print Rankings
+            </button>
+        </div>
+        <div id="rankingsContent">
+            ${createEmptyState('Select a Competition', 'Choose a competition to view the current rankings')}
+        </div>
+    `);
+
+    fetchData(`${API_URL}/competitions`)
+        .then(competitions => {
+            const select = document.getElementById('rankingsCompetition');
+            competitions.forEach(competition => {
+                const option = document.createElement('option');
+                option.value = competition.competition_id;
+                option.setAttribute('data-is-pageant', competition.is_pageant);
+                option.setAttribute('data-name', competition.competition_name);
+                option.textContent = competition.competition_name;
+                select.appendChild(option);
+            });
         });
 }
 
-// ==========================================
-// 2. NOTIFICATION SYSTEM
-// ==========================================
+function loadCompetitionRankings() {
+    const select = document.getElementById('rankingsCompetition');
+    const competitionId = select.value;
+    
+    if (!competitionId) {
+        document.getElementById('rankingsContent').innerHTML = createEmptyState('Select a Competition', 'Choose a competition to view rankings');
+        document.getElementById('printBtn').style.display = 'none';
+        return;
+    }
+
+    const selectedOption = select.options[select.selectedIndex];
+    const isPageant = selectedOption.getAttribute('data-is-pageant') === '1';
+    const competitionName = selectedOption.getAttribute('data-name');
+
+    document.getElementById('rankingsContent').innerHTML = '<div class="loading">Loading rankings...</div>';
+    document.getElementById('printBtn').style.display = 'inline-block';
+
+    window.currentCompetitionName = competitionName;
+    window.currentCompetitionId = competitionId;
+
+    const endpoint = isPageant ? 
+        `${API_URL}/pageant-grand-total/${competitionId}` : 
+        `${API_URL}/overall-scores/${competitionId}`;
+
+    fetchData(endpoint)
+        .then(scores => {
+            if (!scores || scores.length === 0) {
+                document.getElementById('rankingsContent').innerHTML = `
+                    <div style="text-align: center; padding: 40px; background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px;">
+                        <h3>No Scores Yet</h3>
+                        <p>No scores have been submitted for this competition.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            displayRankings(scores, competitionName, isPageant);
+        })
+        .catch(() => showError('rankingsContent', 'Error loading rankings'));
+}
+
+function displayRankings(scores, competitionName, isPageant) {
+    let rankings = [];
+    
+   if (isPageant) {
+   rankings = scores.map(score => ({
+     participant_name: score.participant_name,
+     contestant_number: score.contestant_number,
+     performance_title: score.performance_title,
+     // use weighted grand total from API
+     average_score: Number(score.weighted_grand_total),   // keep field name used by renderer
+     judge_count: score.judge_count,
+     segments_completed: score.segments_completed
+   }));
+    } else {
+        const participantScores = {};
+        scores.forEach(score => {
+            if (!participantScores[score.participant_id]) {
+                participantScores[score.participant_id] = {
+                    participant_name: score.participant_name,
+                    performance_title: score.performance_title,
+                    scores: []
+                };
+            }
+            participantScores[score.participant_id].scores.push(parseFloat(score.total_score));
+        });
+        
+        rankings = Object.values(participantScores).map(p => {
+            const sum = p.scores.reduce((acc, s) => acc + s, 0);
+            return {
+                participant_name: p.participant_name,
+                performance_title: p.performance_title,
+                average_score: sum / p.scores.length,
+                judge_count: p.scores.length
+            };
+        });
+    }
+    
+    rankings.sort((a, b) => b.average_score - a.average_score);
+    
+    window.currentRankings = rankings;
+    window.isPageantRankings = isPageant;
+    
+    let html = `
+        <div id="printableRankings">
+            <div class="print-header" style="display: none;">
+                <h1 style="color: #800020; text-align: center; margin-bottom: 10px;">Competition Rankings</h1>
+                <h2 style="text-align: center; color: #666; margin-bottom: 20px;">${sanitizeHTML(competitionName)}</h2>
+                <p style="text-align: center; color: #666; margin-bottom: 30px;">
+                    Generated on ${new Date().toLocaleString()}
+                </p>
+            </div>
+            
+            <div style="background: #800020; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px;" class="no-print">
+                <h3 style="margin: 0; color: white;">${sanitizeHTML(competitionName)}</h3>
+                <p style="margin: 5px 0 0 0; opacity: 0.9;">Current Rankings - ${rankings.length} Participants</p>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background: #800020; color: white;">
+                        <th style="padding: 15px; text-align: center; width: 80px;">Rank</th>
+                        <th style="padding: 15px; text-align: left;">Participant</th>
+                        ${isPageant ? '<th style="padding: 15px; text-align: center;">Contestant #</th>' : ''}
+                        <th style="padding: 15px; text-align: left;">Performance</th>
+                        <th style="padding: 15px; text-align: center;">Average Score</th>
+                        <th style="padding: 15px; text-align: center;">Judges</th>
+                        ${isPageant ? '<th style="padding: 15px; text-align: center;">Segments</th>' : ''}
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    rankings.forEach((participant, index) => {
+        const rank = index + 1;
+        const rankColor = rank === 1 ? '#FFD700' : rank === 2 ? '#C0C0C0' : rank === 3 ? '#CD7F32' : '#666';
+        const rankMedal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
+        const bgColor = index % 2 === 0 ? '#ffffff' : '#f9f9f9';
+        
+        html += `
+            <tr style="background: ${bgColor}; border-bottom: 1px solid #ddd;">
+                <td style="padding: 15px; text-align: center; font-size: 24px; font-weight: bold; color: ${rankColor};">
+                    ${rankMedal} ${rank}
+                </td>
+                <td style="padding: 15px; font-weight: 600;">${sanitizeHTML(participant.participant_name)}</td>
+                ${isPageant ? `<td style="padding: 15px; text-align: center;">${sanitizeHTML(participant.contestant_number) || 'N/A'}</td>` : ''}
+                <td style="padding: 15px;">${sanitizeHTML(participant.performance_title) || 'N/A'}</td>
+                <td style="padding: 15px; text-align: center; font-size: 20px; font-weight: bold; color: #800020;">
+                    ${participant.average_score.toFixed(2)}
+                </td>
+                <td style="padding: 15px; text-align: center;">${participant.judge_count}</td>
+                ${isPageant ? `<td style="padding: 15px; text-align: center;">${participant.segments_completed || 'N/A'}</td>` : ''}
+            </tr>
+        `;
+    });
+    
+    const avgScore = (rankings.reduce((sum, p) => sum + p.average_score, 0) / rankings.length).toFixed(2);
+    
+    html += `
+                </tbody>
+            </table>
+            
+            <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;" class="no-print">
+                <h4 style="color: #800020;">Ranking Summary</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                    <div><strong>Total Participants:</strong> ${rankings.length}</div>
+                    <div><strong>Highest Score:</strong> ${rankings[0]?.average_score.toFixed(2) || 'N/A'}</div>
+                    <div><strong>Lowest Score:</strong> ${rankings[rankings.length - 1]?.average_score.toFixed(2) || 'N/A'}</div>
+                    <div><strong>Average Score:</strong> ${avgScore}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;" class="no-print">
+            <button onclick="printRankings()" class="card-button">Print Rankings</button>
+            <button onclick="exportRankingsCSV()" class="card-button">Export to CSV</button>
+            <button onclick="showDashboard()" class="secondary">Back to Dashboard</button>
+        </div>
+    `;
+    
+    document.getElementById('rankingsContent').innerHTML = html;
+}
+
+function printRankings() {
+    const printHeaders = document.querySelectorAll('.print-header');
+    printHeaders.forEach(header => header.style.display = 'block');
+    
+    const noPrintElements = document.querySelectorAll('.no-print');
+    noPrintElements.forEach(element => element.style.display = 'none');
+    
+    window.print();
+    
+    setTimeout(() => {
+        printHeaders.forEach(header => header.style.display = 'none');
+        noPrintElements.forEach(element => element.style.display = 'block');
+    }, 1000);
+}
+
+function exportRankingsCSV() {
+    if (!window.currentRankings) {
+        showNotification('No rankings data to export', 'error');
+        return;
+    }
+    
+    const isPageant = window.isPageantRankings;
+    const competitionName = window.currentCompetitionName;
+    
+    let csv = `Competition Rankings - ${competitionName}\n`;
+    csv += `Generated on ${new Date().toLocaleString()}\n\n`;
+    
+    if (isPageant) {
+       csv += 'Rank,Participant Name,Contestant Number,Performance,Grand Total (Weighted),Judges,Segments Completed\n';
+    } else {
+        csv += 'Rank,Participant Name,Performance,Average Score,Judges\n';
+    }
+    
+    window.currentRankings.forEach((participant, index) => {
+        const rank = index + 1;
+        const row = [
+            rank,
+            `"${participant.participant_name}"`,
+            ...(isPageant ? [`"${participant.contestant_number || 'N/A'}"`] : []),
+            `"${participant.performance_title || 'N/A'}"`,
+            participant.average_score.toFixed(2),
+            participant.judge_count,
+            ...(isPageant ? [participant.segments_completed || 'N/A'] : [])
+        ];
+        csv += row.join(',') + '\n';
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${competitionName.replace(/\s+/g, '_')}_Rankings_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    showNotification('Rankings exported successfully', 'success');
+}
+
+// =====================================================
+// UTILITY FUNCTIONS
+// =====================================================
+
+function fetchData(url) {
+    return fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        });
+}
+
+function postData(url, data) {
+    return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    });
+}
+
+function putData(url, data) {
+    return fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    });
+}
+
+function setContent(html) {
+    const contentElement = document.getElementById('content');
+    if (contentElement) {
+        contentElement.innerHTML = html;
+    }
+}
+
+function getInputValue(id) {
+    const element = document.getElementById(id);
+    return element ? (element.value || null) : null;
+}
+
+function sanitizeHTML(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function formatDate(dateString) {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function getStatusColor(status) {
+    const colors = {
+        'done': '#28a745',
+        'ongoing': '#ffc107',
+        'pending': '#dc3545',
+        'active': '#28a745'
+    };
+    return colors[status] || '#666';
+}
+
+function createEmptyState(title, message) {
+    return `
+        <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
+            <h3>${title}</h3>
+            <p>${message}</p>
+        </div>
+    `;
+}
+
+function showError(elementId, message) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.innerHTML = `
+            <div style="text-align: center; padding: 40px; background: #fff3cd; border-radius: 8px;">
+                <h3>Error</h3>
+                <p>${message}</p>
+            </div>
+        `;
+    }
+}
+
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
@@ -1528,9 +1994,9 @@ function showNotification(message, type = 'info') {
         color: white;
         font-weight: 600;
         z-index: 10000;
-        animation: slideIn 0.3s ease-out;
         max-width: 300px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        animation: slideIn 0.3s ease-out;
     `;
     
     const colors = {
@@ -1539,558 +2005,79 @@ function showNotification(message, type = 'info') {
         warning: '#ffc107',
         info: '#17a2b8'
     };
+    
     notification.style.background = colors[type] || colors.info;
     document.body.appendChild(notification);
     
     setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease-out';
+        notification.style.animation = 'slideOut 0.3s ease-in';
         setTimeout(() => notification.remove(), 300);
     }, 5000);
 }
 
-// ==========================================
-// 3. CONNECTION SPEED MONITOR
-// ==========================================
-let connectionQuality = 'good';
-
-function checkConnectionSpeed() {
-    const startTime = new Date().getTime();
-    fetch('http://localhost:3002/competitions', { method: 'HEAD' })
-    .then(() => {
-        const endTime = new Date().getTime();
-        const latency = endTime - startTime;
-        
-        if (latency < 200) {
-            updateConnectionIndicator('🟢 Excellent', '#28a745');
-        } else if (latency < 500) {
-            updateConnectionIndicator('🟡 Good', '#ffc107');
-        } else {
-            updateConnectionIndicator('🔴 Slow', '#dc3545');
-        }
-    })
-    .catch(() => {
-        updateConnectionIndicator('⚫ Offline', '#dc3545');
-    });
-}
-
-function updateConnectionIndicator(text, color) {
-    let indicator = document.getElementById('connection-indicator');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'connection-indicator';
-        indicator.style.cssText = `
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 5px 15px;
-            background: white;
-            border: 2px solid ${color};
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-            z-index: 9999;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        `;
-        document.body.appendChild(indicator);
+function clearAllIntervals() {
+    if (statusUpdateInterval) {
+        clearInterval(statusUpdateInterval);
+        statusUpdateInterval = null;
     }
-    indicator.textContent = text;
-    indicator.style.borderColor = color;
-    indicator.style.color = color;
 }
 
-setInterval(checkConnectionSpeed, 10000);
-checkConnectionSpeed();
+function initializeConnectionMonitor() {
+    window.addEventListener('online', () => {
+        showNotification('You are back online', 'success');
+    });
 
-// ==========================================
-// 4. LIVE PARTICIPANT STATUS MONITOR
-// ==========================================
-function showLiveParticipantStatus(competitionId, competitionName) {
-    document.getElementById("content").innerHTML = `
-        <h2>📊 Live Participant Status</h2>
-        <h3 style="color: #800020;">${competitionName}</h3>
-        
-        <div style="background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; border: 2px solid #2196F3;">
-            <strong>🔴 LIVE</strong> - Updates every 5 seconds
-        </div>
-        
-        <div style="margin-bottom: 20px;">
-            <button onclick="showViewCompetitions()" class="secondary">← Back to Competitions</button>
-        </div>
-        
-        <div id="participantStatusGrid">
-            <div class="loading">Loading participant status...</div>
-        </div>
-    `;
-    
-    updateParticipantStatus(competitionId);
-    const statusInterval = setInterval(() => updateParticipantStatus(competitionId), 5000);
-    window.currentStatusInterval = statusInterval;
-}
-
-function updateParticipantStatus(competitionId) {
-    Promise.all([
-        fetch(`http://localhost:3002/participants/${competitionId}`).then(r => r.json()),
-        fetch(`http://localhost:3002/overall-scores/${competitionId}`).then(r => r.json()),
-        fetch('http://localhost:3002/judges').then(r => r.json())
-    ])
-    .then(([participants, scores, allJudges]) => {
-        const judges = allJudges.filter(j => j.competition_id == competitionId);
-        const totalJudges = judges.length;
-        
-        // FIX: Check if element exists before updating
-        const participantStatusGrid = document.getElementById("participantStatusGrid");
-        if (!participantStatusGrid) {
-            console.error('participantStatusGrid element not found');
-            return;
-        }
-        
-        if (participants.length === 0) {
-            participantStatusGrid.innerHTML = `
-                <div style="text-align: center; padding: 40px; background: #f8f9fa; border-radius: 8px;">
-                    <h3>No Participants Yet</h3>
-                    <p>Add participants to this competition to track their scoring status.</p>
-                </div>
-            `;
-            return;
-        }
-        
-        let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px;">';
-        
-        participants.forEach(participant => {
-            const participantScores = scores.filter(s => s.participant_id === participant.participant_id);
-            const scoredByJudges = participantScores.length;
-            const percentage = totalJudges > 0 ? (scoredByJudges / totalJudges * 100).toFixed(0) : 0;
-            
-            const statusColor = percentage == 100 ? '#28a745' : percentage > 0 ? '#ffc107' : '#dc3545';
-            const statusText = percentage == 100 ? 'COMPLETE ✅' : percentage > 0 ? 'IN PROGRESS 🔄' : 'WAITING ⏳';
-            
-            html += `
-                <div class="participant-status-card" style="background: white; border: 3px solid ${statusColor}; padding: 20px; border-radius: 12px; transition: all 0.3s ease; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
-                    <h4 style="margin: 0 0 15px 0; color: #800020;">${participant.participant_name}</h4>
-                    
-                    <div style="background: #f0f0f0; height: 25px; border-radius: 15px; overflow: hidden; margin: 15px 0;">
-                        <div style="background: ${statusColor}; height: 100%; width: ${percentage}%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">
-                            ${percentage > 10 ? percentage + '%' : ''}
-                        </div>
-                    </div>
-                    
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
-                        <small style="font-weight: bold; color: ${statusColor};">${statusText}</small>
-                        <small style="color: #666;">${scoredByJudges}/${totalJudges} judges</small>
-                    </div>
-                    
-                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">
-                        <small style="color: #999;">Performance: ${participant.performance_title || 'N/A'}</small>
-                    </div>
-                </div>
-            `;
-        });
-        
-        html += '</div>';
-        participantStatusGrid.innerHTML = html;
-    })
-    .catch(error => {
-        console.error('Error updating participant status:', error);
-        const participantStatusGrid = document.getElementById("participantStatusGrid");
-        if (participantStatusGrid) {
-            participantStatusGrid.innerHTML = `
-                <div style="text-align: center; padding: 40px; background: #fff3cd; border-radius: 8px;">
-                    <h3>⚠️ Error Loading Status</h3>
-                    <p>Could not load participant status. Please refresh the page.</p>
-                    <button onclick="location.reload()" class="card-button">Refresh Page</button>
-                </div>
-            `;
-        }
+    window.addEventListener('offline', () => {
+        showNotification('You are offline. Some features may not work.', 'warning');
     });
 }
-// ==========================================
-// 5. REAL-TIME PARTICIPANT COUNT UPDATES
-// ==========================================
-let participantCountInterval;
 
-function startParticipantCountUpdates() {
-    participantCountInterval = setInterval(updateParticipantCounts, 10000);
+function setupGlobalErrorHandling() {
+    window.addEventListener('error', function(e) {
+        console.error('Global error:', e.error);
+    });
+
+    window.addEventListener('unhandledrejection', function(e) {
+        console.error('Unhandled promise rejection:', e.reason);
+    });
 }
 
-function updateParticipantCounts() {
-    fetch('http://localhost:3002/competitions')
-    .then(response => response.json())
-    .then(competitions => {
-        competitions.forEach(comp => {
-            const countElement = document.getElementById(`participant-count-${comp.competition_id}`);
-            if (countElement) {
-                const oldCount = parseInt(countElement.textContent);
-                const newCount = comp.participant_count || 0;
-                
-                if (oldCount !== newCount) {
-                    countElement.textContent = newCount;
-                    countElement.style.color = '#28a745';
-                    countElement.style.fontWeight = 'bold';
-                    
-                    // Flash animation
-                    countElement.style.animation = 'flash 1s ease-in-out';
-                    
-                    setTimeout(() => {
-                        countElement.style.color = '';
-                        countElement.style.fontWeight = '';
-                        countElement.style.animation = '';
-                    }, 2000);
+function loadCompetitionsDropdown(selectId, selectedId = null) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    fetch(`${API_URL}/competitions`)
+        .then(res => res.json())
+        .then(data => {
+            select.innerHTML = '<option value="">Select competition</option>';
+            data.forEach(c => {
+                const option = document.createElement('option');
+                option.value = c.competition_id;
+                option.textContent = `${c.competition_name} (${c.type_name || ''})`;
+                if (selectedId && String(selectedId) === String(c.competition_id)) {
+                    option.selected = true;
                 }
-            }
+                select.appendChild(option);
+            });
+        })
+        .catch(err => {
+            console.error('Error loading competitions:', err);
+            select.innerHTML = '<option value="">Error loading competitions</option>';
         });
+}
+
+// Open Admin-style edit form by fetching the participant by ID
+function editParticipantById(participantId) {
+  fetch(`${API_URL}/participant/${participantId}`)
+    .then(res => res.json())
+    .then(participant => {
+      showEditParticipantForm(participant); // uses the Admin-style form you added
     })
-    .catch(error => {
-        console.error('Error updating participant counts:', error);
+    .catch(err => {
+      console.error('Error loading participant', err);
+      alert('Error loading participant');
     });
 }
 
-function stopParticipantCountUpdates() {
-    if (participantCountInterval) clearInterval(participantCountInterval);
-}
-
-// ==========================================
-// 6. LIVE SEARCH FOR PARTICIPANTS
-// ==========================================
-function setupLiveParticipantSearch() {
-    const searchContainer = document.createElement('div');
-    searchContainer.style.cssText = 'margin-bottom: 20px;';
-    
-    const searchInput = document.createElement('input');
-    searchInput.type = 'text';
-    searchInput.id = 'participantSearch';
-    searchInput.placeholder = '🔍 Search participants by name, email, or school...';
-    searchInput.style.cssText = `
-        width: 100%;
-        max-width: 500px;
-        padding: 15px 20px;
-        border: 2px solid #ddd;
-        border-radius: 25px;
-        font-size: 16px;
-        transition: all 0.3s ease;
-    `;
-    
-    searchInput.onfocus = function() {
-        this.style.borderColor = '#800020';
-        this.style.boxShadow = '0 0 10px rgba(128, 0, 32, 0.2)';
-    };
-    
-    searchInput.onblur = function() {
-        this.style.borderColor = '#ddd';
-        this.style.boxShadow = 'none';
-    };
-    
-    let searchTimeout;
-    searchInput.oninput = function(e) {
-        clearTimeout(searchTimeout);
-        
-        // Show searching indicator
-        const resultsDiv = document.getElementById('participantsList');
-        if (e.target.value.length > 0) {
-            resultsDiv.style.opacity = '0.5';
-        }
-        
-        searchTimeout = setTimeout(() => {
-            liveSearchParticipants(e.target.value);
-        }, 300);
-    };
-    
-    searchContainer.appendChild(searchInput);
-    return searchContainer;
-}
-
-function liveSearchParticipants(query) {
-    const resultsDiv = document.getElementById('participantsList');
-    
-    if (query.length === 0) {
-        // Reload all participants if search is empty
-        loadParticipants();
-        return;
-    }
-    
-    fetch('http://localhost:3002/participants')
-    .then(response => response.json())
-    .then(participants => {
-        const filtered = participants.filter(participant => {
-            const searchText = `${participant.participant_name} ${participant.email} ${participant.school_organization} ${participant.performance_title}`.toLowerCase();
-            return searchText.includes(query.toLowerCase());
-        });
-        
-        resultsDiv.style.opacity = '1';
-        
-        if (filtered.length === 0) {
-            resultsDiv.innerHTML = `
-                <div style="text-align: center; padding: 40px; background: #fff3cd; border-radius: 8px; border: 2px solid #ffc107;">
-                    <h3>🔍 No Results Found</h3>
-                    <p>No participants match "${query}"</p>
-                    <button onclick="document.getElementById('participantSearch').value=''; loadParticipants();" class="card-button">Clear Search</button>
-                </div>
-            `;
-        } else {
-            showNotification(`Found ${filtered.length} participant(s)`, 'info');
-            displayFilteredParticipants(filtered);
-        }
-    })
-    .catch(error => {
-        console.error('Search error:', error);
-        showNotification('Search error occurred', 'error');
-        resultsDiv.style.opacity = '1';
-    });
-}
-
-function displayFilteredParticipants(participants) {
-    let html = '<div style="display: grid; gap: 20px;">';
-    
-    participants.forEach(participant => {
-        const statusColor = participant.status === 'done' ? '#28a745' : 
-                           participant.status === 'ongoing' ? '#ffc107' : '#dc3545';
-        const eventIcon = participant.is_pageant ? '👑' : '🎪';
-        
-        html += `
-            <div class="dashboard-card" style="text-align: left; border-left: 4px solid ${statusColor};">
-                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
-                    <h3>${participant.participant_name} ${eventIcon}</h3>
-                    <span style="padding: 6px 12px; border-radius: 15px; font-size: 12px; font-weight: bold; background: ${statusColor}; color: white;">
-                        ${participant.status.toUpperCase()}
-                    </span>
-                </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 15px 0;">
-                    <div>
-                        <p><strong>Age:</strong> ${participant.age}</p>
-                        <p><strong>Gender:</strong> ${participant.gender}</p>
-                        <p><strong>Email:</strong> ${participant.email}</p>
-                    </div>
-                    <div>
-                        <p><strong>Competition:</strong> ${participant.competition_name}</p>
-                        <p><strong>Event Type:</strong> ${participant.type_name || participant.category} ${eventIcon}</p>
-                        <p><strong>Performance:</strong> ${participant.performance_title || 'N/A'}</p>
-                    </div>
-                    <div>
-                        <p><strong>School/Org:</strong> ${participant.school_organization || 'N/A'}</p>
-                        ${participant.is_pageant && participant.height ? `<p><strong>Height:</strong> ${participant.height}</p>` : ''}
-                    </div>
-                </div>
-                
-                <div style="margin-top: 15px;">
-                    <button onclick="viewParticipantDetails(${participant.participant_id})" style="margin: 2px; padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">👁️ View Details</button>
-                    <button onclick="editParticipant(${participant.participant_id})" style="margin: 2px; padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer;">✏️ Edit</button>
-                </div>
-            </div>
-        `;
-    });
-    
-    html += '</div>';
-    document.getElementById('participantsList').innerHTML = html;
-}
-
-// ==========================================
-// 7. QUICK STATS DASHBOARD
-// ==========================================
-function showQuickStatsDashboard() {
-    document.getElementById("content").innerHTML = `
-        <h2>📊 Quick Statistics Dashboard</h2>
-        
-        <div style="background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; border: 2px solid #2196F3;">
-            <strong>🔄 Auto-refreshing</strong> - Statistics update every 15 seconds
-        </div>
-        
-        <div id="quickStatsContent">
-            <div class="loading">Loading statistics...</div>
-        </div>
-    `;
-    
-    loadQuickStats();
-    const statsInterval = setInterval(loadQuickStats, 15000);
-    window.currentStatsInterval = statsInterval;
-}
-
-function loadQuickStats() {
-    Promise.all([
-        fetch('http://localhost:3002/competitions').then(r => r.json()),
-        fetch('http://localhost:3002/participants').then(r => r.json()),
-        fetch('http://localhost:3002/judges').then(r => r.json())
-    ])
-    .then(([competitions, participants, judges]) => {
-        // Calculate stats
-        const totalCompetitions = competitions.length;
-        const totalParticipants = participants.length;
-        const totalJudges = judges.length;
-        
-        const activeCompetitions = competitions.filter(c => new Date(c.competition_date) >= new Date()).length;
-        const paidParticipants = participants.filter(p => p.status === 'paid').length;
-        const pendingParticipants = participants.filter(p => p.status === 'pending').length;
-        
-        let html = `
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
-                <div style="text-align: center; background: linear-gradient(135deg, #800020 0%, #a0002a 100%); color: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(128, 0, 32, 0.3);">
-                    <h4 style="font-size: 3em; margin: 0;">${totalCompetitions}</h4>
-                    <p style="margin: 10px 0 0 0; font-size: 1.1em;">Total Competitions</p>
-                    <small>${activeCompetitions} active</small>
-                </div>
-                
-                <div style="text-align: center; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);">
-                    <h4 style="font-size: 3em; margin: 0;">${totalParticipants}</h4>
-                    <p style="margin: 10px 0 0 0; font-size: 1.1em;">Total Participants</p>
-                    <small>${paidParticipants} paid | ${pendingParticipants} pending</small>
-                </div>
-                
-                <div style="text-align: center; background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); color: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(23, 162, 184, 0.3);">
-                    <h4 style="font-size: 3em; margin: 0;">${totalJudges}</h4>
-                    <p style="margin: 10px 0 0 0; font-size: 1.1em;">Total Judges</p>
-                    <small>Assigned to competitions</small>
-                </div>
-            </div>
-            
-            <div style="margin-top: 30px;">
-                <h3>📈 Recent Activity</h3>
-                <div style="background: white; padding: 20px; border-radius: 12px; border: 2px solid #ddd; margin-top: 15px;">
-                    <p>🔴 Live updates - Last refreshed: ${new Date().toLocaleTimeString()}</p>
-                </div>
-            </div>
-        `;
-        
-        document.getElementById('quickStatsContent').innerHTML = html;
-    })
-    .catch(error => {
-        console.error('Error loading quick stats:', error);
-        showNotification('Error loading statistics', 'error');
-    });
-}
-
-function stopQuickStats() {
-    if (window.currentStatsInterval) {
-        clearInterval(window.currentStatsInterval);
-    }
-}
-
-// ==========================================
-// 8. ENHANCE EXISTING FUNCTIONS
-// ==========================================
-
-// Enhance the existing showViewParticipants function
-const originalShowViewParticipants = showViewParticipants;
-showViewParticipants = function() {
-    originalShowViewParticipants();
-    
-    // Add live search after the page loads
-    setTimeout(() => {
-        const content = document.getElementById('content');
-        const searchBox = setupLiveParticipantSearch();
-        
-        // Insert search box before the filters
-        const filterDiv = content.querySelector('[id*="filter"]')?.parentElement;
-        if (filterDiv) {
-            filterDiv.parentElement.insertBefore(searchBox, filterDiv);
-        } else {
-            content.insertBefore(searchBox, content.firstChild.nextSibling);
-        }
-    }, 100);
-};
-
-// ==========================================
-// 9. SELECT COMPETITION FOR LIVE STATUS
-// ==========================================
-function selectCompetitionForLiveStatus() {
-    fetch('http://localhost:3002/competitions')
-    .then(response => response.json())
-    .then(competitions => {
-        if (competitions.length === 0) {
-            showNotification('No competitions available', 'warning');
-            return;
-        }
-        
-        let html = `
-            <h2>Select Competition for Live Status</h2>
-            <div style="display: grid; gap: 15px; margin-top: 20px;">
-        `;
-        
-        competitions.forEach(comp => {
-            const eventIcon = comp.is_pageant ? '👑' : '🎪';
-            html += `
-                <div class="dashboard-card" style="text-align: left; cursor: pointer; transition: all 0.3s ease;" 
-                     onclick="showLiveParticipantStatus(${comp.competition_id}, '${comp.competition_name.replace(/'/g, "\\'")}')"
-                     onmouseover="this.style.transform='translateY(-5px)'; this.style.boxShadow='0 8px 20px rgba(128, 0, 32, 0.2)'"
-                     onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow=''">
-                    <h3>${comp.competition_name} ${eventIcon}</h3>
-                    <p><strong>Date:</strong> ${comp.competition_date}</p>
-                    <p><strong>Participants:</strong> <span id="participant-count-${comp.competition_id}">${comp.participant_count || 0}</span></p>
-                    <p><strong>Judges:</strong> ${comp.judge_count || 0}</p>
-                    <button class="card-button" style="margin-top: 10px;">View Live Status</button>
-                </div>
-            `;
-        });
-        
-        html += '</div>';
-        document.getElementById("content").innerHTML = html;
-        
-        // Start auto-updating participant counts
-        startParticipantCountUpdates();
-    })
-    .catch(error => {
-        console.error('Error loading competitions:', error);
-        showNotification('Error loading competitions', 'error');
-    });
-}
-
-// ==========================================
-// 10. ADD TO DASHBOARD
-// ==========================================
-// Enhance the existing showDashboard to include new features
-const originalShowDashboard = showDashboard;
-showDashboard = function() {
-    originalShowDashboard();
-    
-    // Add new dashboard cards
-    setTimeout(() => {
-        const content = document.getElementById('content');
-        const dashboardGrid = content.querySelector('[style*="grid"]');
-        
-        if (dashboardGrid) {
-            const newCards = `
-                <div class="dashboard-card">
-                    <h3>📊 Live Status</h3>
-                    <p>Real-time participant scoring status</p>
-                    <button onclick="selectCompetitionForLiveStatus()" class="card-button">View Live Status</button>
-                </div>
-                
-                <div class="dashboard-card">
-                    <h3>📈 Quick Stats</h3>
-                    <p>Auto-refreshing statistics dashboard</p>
-                    <button onclick="showQuickStatsDashboard()" class="card-button">View Statistics</button>
-                </div>
-            `;
-            
-            dashboardGrid.insertAdjacentHTML('beforeend', newCards);
-        }
-    }, 100);
-};
-
-// ==========================================
-// 11. CLEANUP ON PAGE NAVIGATION
-// ==========================================
-function cleanupIntervals() {
-    stopParticipantStatus();
-    stopParticipantCountUpdates();
-    stopQuickStats();
-}
-
-// Auto-cleanup when navigating
-window.addEventListener('beforeunload', cleanupIntervals);
-
-// ==========================================
-// 12. FLASH ANIMATION CSS
-// ==========================================
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes flash {
-        0%, 100% { background-color: transparent; }
-        50% { background-color: #ffd700; }
-    }
-`;
-document.head.appendChild(style);
-
-// ==========================================
-// END OF AJAX ENHANCEMENTS FOR staff-app.js
-// ==========================================
-
-console.log('✅ AJAX Enhancements loaded for Staff Dashboard');
+// Initialize dashboard on load
+showDashboard();

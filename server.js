@@ -1,31 +1,67 @@
+// Disable dotenv on Railway - use Railway's environment variables instead
+if (process.env.RAILWAY_ENVIRONMENT !== 'production' && !process.env.MYSQLHOST) {
+    require('dotenv').config();
+}
 const express = require('express');
-const mysql = require('mysql');
+const mysql = require('mysql2');
 const path = require('path');
+const cors = require('cors');
 const app = express();
-const port = 3002;
+const PORT = process.env.PORT || 8080;
+
+
+// Enable CORS
+app.use(cors());
+
+
 
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '')));
 
-// Enhanced MySQL connection with better error handling
-const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '',
-    database: 'judging_system',
-    multipleStatements: true
+
+// Database connection
+
+const db = mysql.createPool({
+    host: process.env.MYSQLHOST || process.env.DB_HOST || 'localhost',
+    user: process.env.MYSQLUSER || process.env.DB_USER || 'root',
+    password: process.env.MYSQLPASSWORD || process.env.DB_PASSWORD || '',
+    database: process.env.MYSQLDATABASE || process.env.MYSQL_DATABASE || 'judging_system',
+    port: parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306'),
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    connectTimeout: 30000
 });
 
-// Connect to database
-db.connect((err) => {
+// Debug what we're actually using
+console.log('🔧 Attempting connection with:');
+console.log('  Host:', process.env.MYSQLHOST || process.env.DB_HOST || 'localhost');
+console.log('  User:', process.env.MYSQLUSER || process.env.DB_USER || 'root');
+console.log('  Database:', process.env.MYSQLDATABASE || process.env.MYSQL_DATABASE || 'judging_system');
+console.log('  Port:', process.env.MYSQLPORT || process.env.DB_PORT || '3306');
+
+// Test the pool connection
+db.getConnection((err, connection) => {
     if (err) {
-        console.error('Database connection failed:', err);
+        console.error('❌ Database connection failed:', err.message);
         return;
     }
-    console.log('Connected to Enhanced MySQL database');
+    console.log('✅ Connected to MySQL database pool');
+    connection.release(); // Return connection to pool
 });
+// Debug what we're actually using
+console.log('🔧 Attempting connection with:');
+console.log('  Host:', process.env.MYSQLHOST || process.env.DB_HOST || 'localhost');
+console.log('  User:', process.env.MYSQLUSER || process.env.DB_USER || 'root');
+console.log('  Database:', process.env.MYSQLDATABASE || process.env.MYSQL_DATABASE || 'judging_system');
+console.log('  Port:', process.env.MYSQLPORT || process.env.DB_PORT || '3306');
+
+
+
+// Connect to database
+
 
 // Generate random password
 function generatePassword(length = 8) {
@@ -127,6 +163,39 @@ app.post('/create-event-type', (req, res) => {
         });
     });
 });
+
+// Delete an event type (only if not used by any competitions)
+app.delete('/delete-event-type/:id', (req, res) => {
+  const { id } = req.params;
+
+  // First, check if any competitions are using this event type
+  const checkSql = 'SELECT COUNT(*) AS cnt FROM competitions WHERE event_type_id = ?';
+  db.query(checkSql, [id], (err, rows) => {
+    if (err) {
+      console.error('Error checking event type usage:', err);
+      return res.status(500).json({ success: false, error: 'Database error checking usage' });
+    }
+
+    const count = rows?.[0]?.cnt || 0;
+    if (count > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot delete: this event type is used by ${count} competition(s).`
+      });
+    }
+
+    // Safe to delete
+    const delSql = 'DELETE FROM event_types WHERE event_type_id = ?';
+    db.query(delSql, [id], (err2, result) => {
+      if (err2) {
+        console.error('Error deleting event type:', err2);
+        return res.status(500).json({ success: false, error: 'Error deleting event type' });
+      }
+      return res.json({ success: true, message: 'Event type deleted successfully!' });
+    });
+  });
+});
+
 
 // ================================================
 // ENHANCED COMPETITION ENDPOINTS
@@ -363,10 +432,9 @@ app.get('/participant/:id', (req, res) => {
 
 app.post('/add-participant', (req, res) => {
     const { 
-        participant_name, email, phone, age, gender, 
+        participant_name, contestant_number, photo_url, email, phone, age, gender, 
         school_organization, performance_title, performance_description, 
         competition_id, status,
-        // Pageant specific fields
         height, measurements, talents, special_awards
     } = req.body;
 
@@ -374,17 +442,29 @@ app.post('/add-participant', (req, res) => {
         return res.status(400).json({ error: 'Required fields missing' });
     }
 
-    // FIX: Remove the double comma in the SQL statement
     const sql = `INSERT INTO participants 
-                (participant_name, email, phone, age, gender, school_organization, 
+                (participant_name, contestant_number, photo_url, email, phone, age, gender, school_organization, 
                  performance_title, performance_description, competition_id, status,
                  height, measurements, talents, special_awards) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     
     db.query(sql, [
-        participant_name, email, phone, age, gender, school_organization,
-        performance_title, performance_description, competition_id, status || 'pending',
-        height, measurements, talents, special_awards
+        participant_name, 
+        contestant_number || null,
+        photo_url || null,
+        email, 
+        phone, 
+        age, 
+        gender, 
+        school_organization,
+        performance_title, 
+        performance_description, 
+        competition_id, 
+        status || 'Active',
+        height || null,
+        measurements || null, // Keep this field
+        talents || null,
+        special_awards || null
     ], (err, result) => {
         if (err) {
             console.error('Error adding participant:', err);
@@ -397,7 +477,40 @@ app.post('/add-participant', (req, res) => {
         });
     });
 });
+app.put('/update-participant/:id', (req, res) => {
+    const { id } = req.params;
+    const { 
+        participant_name, contestant_number, photo_url, email, phone, age, gender, 
+        school_organization, performance_title, performance_description, 
+        competition_id, status, height, measurements, talents, special_awards
+    } = req.body;
 
+    if (!participant_name || !email || !age || !gender || !competition_id) {
+        return res.status(400).json({ error: 'Required fields missing' });
+    }
+
+    const sql = `UPDATE participants 
+                 SET participant_name = ?, contestant_number = ?, photo_url = ?, email = ?, phone = ?, 
+                     age = ?, gender = ?, school_organization = ?, performance_title = ?, 
+                     performance_description = ?, competition_id = ?, status = ?, 
+                     height = ?, measurements = ?, talents = ?, special_awards = ?
+                 WHERE participant_id = ?`;
+    
+    db.query(sql, [
+        participant_name, contestant_number, photo_url, email, phone, age, gender, 
+        school_organization, performance_title, performance_description, 
+        competition_id, status, height, measurements, talents, special_awards, id
+    ], (err, result) => {
+        if (err) {
+            console.error('Error updating participant:', err);
+            return res.status(500).json({ error: 'Error updating participant' });
+        }
+        res.json({ 
+            success: true, 
+            message: 'Participant updated successfully!'
+        });
+    });
+});
 
 app.put('/update-participant-status/:id', (req, res) => {
     const { id } = req.params;
@@ -482,27 +595,209 @@ app.get('/judge/:id', (req, res) => {
     });
 });
 
+
 app.get('/judge-competitions/:judgeId', (req, res) => {
     const { judgeId } = req.params;
+    
+    console.log('📊 Fetching competitions for judge:', judgeId);
+    
     const sql = `
-        SELECT DISTINCT c.competition_id, c.competition_name, c.competition_date, c.event_description,
-               et.type_name, et.is_pageant,
-               COUNT(DISTINCT p.participant_id) as participant_count
+        SELECT DISTINCT 
+            c.competition_id, 
+            c.competition_name, 
+            c.competition_date, 
+            c.event_description,
+            et.type_name, 
+            et.is_pageant,
+            COUNT(DISTINCT p.participant_id) as participant_count,
+            COUNT(DISTINCT j.judge_id) as total_judges
         FROM competitions c
         JOIN event_types et ON c.event_type_id = et.event_type_id
         JOIN judges j ON c.competition_id = j.competition_id
         LEFT JOIN participants p ON c.competition_id = p.competition_id
         WHERE j.judge_id = ? 
-        GROUP BY c.competition_id, c.competition_name, c.competition_date, c.event_description, et.type_name, et.is_pageant
+        GROUP BY c.competition_id, c.competition_name, c.competition_date, 
+                 c.event_description, et.type_name, et.is_pageant
         ORDER BY c.competition_date DESC
     `;
-    db.query(sql, [judgeId], (err, result) => {
+    
+    db.query(sql, [judgeId], (err, competitions) => {
         if (err) {
+            console.error('❌ Error fetching judge competitions:', err);
             return res.status(500).json({ error: 'Error fetching judge competitions' });
         }
-        res.json(result);
+        
+        console.log(`📋 Found ${competitions.length} competitions for judge ${judgeId}`);
+        
+        // For each competition, calculate correct scoring progress
+        const promises = competitions.map(comp => {
+            return new Promise((resolve, reject) => {
+                if (comp.is_pageant) {
+                    // FOR PAGEANTS: Count unique participant-segment combinations
+                    const pageantSql = `
+                        SELECT 
+                            COUNT(DISTINCT CONCAT(p.participant_id, '-', ps.segment_id)) as total_required,
+                            COUNT(DISTINCT CASE 
+                                WHEN os.score_id IS NOT NULL 
+                                THEN CONCAT(os.participant_id, '-', os.segment_id) 
+                            END) as scored_count
+                        FROM participants p
+                        CROSS JOIN pageant_segments ps
+                        LEFT JOIN overall_scores os 
+                            ON p.participant_id = os.participant_id 
+                            AND ps.segment_id = os.segment_id 
+                            AND os.judge_id = ?
+                        WHERE p.competition_id = ? 
+                            AND ps.competition_id = ?
+                            AND ps.is_active = TRUE
+                    `;
+                    
+                    db.query(pageantSql, [judgeId, comp.competition_id, comp.competition_id], (err, result) => {
+                        if (err) {
+                            console.error('❌ Error calculating pageant progress:', err);
+                            reject(err);
+                        } else {
+                            comp.scored_count = result[0].scored_count || 0;
+                            comp.total_required = result[0].total_required || 0;
+                            console.log(`✅ PAGEANT ${comp.competition_name}: ${comp.scored_count}/${comp.total_required}`);
+                            resolve(comp);
+                        }
+                    });
+                } else {
+                    // FOR REGULAR: Count participant scores (FIXED - exclude pageant scores)
+                    const regularSql = `
+                        SELECT 
+                            COUNT(DISTINCT p.participant_id) as total_required,
+                            COUNT(DISTINCT CASE 
+                                WHEN os.score_id IS NOT NULL 
+                                THEN os.participant_id 
+                            END) as scored_count,
+                            GROUP_CONCAT(DISTINCT p.participant_id ORDER BY p.participant_id) as all_participant_ids,
+                            GROUP_CONCAT(DISTINCT CASE 
+                                WHEN os.score_id IS NOT NULL 
+                                THEN os.participant_id 
+                            END ORDER BY os.participant_id) as scored_participant_ids
+                        FROM participants p
+                        LEFT JOIN overall_scores os 
+                            ON p.participant_id = os.participant_id 
+                            AND os.judge_id = ?
+                            AND os.competition_id = ?
+                            AND os.segment_id IS NULL
+                        WHERE p.competition_id = ?
+                    `;
+                    
+                    db.query(regularSql, [judgeId, comp.competition_id, comp.competition_id], (err, result) => {
+                        if (err) {
+                            console.error('❌ Error calculating regular progress:', err);
+                            reject(err);
+                        } else {
+                            comp.scored_count = result[0].scored_count || 0;
+                            comp.total_required = result[0].total_required || 0;
+                            
+                            console.log(`✅ REGULAR ${comp.competition_name}:`, {
+                                scored: comp.scored_count,
+                                total: comp.total_required,
+                                all_participants: result[0].all_participant_ids,
+                                scored_participants: result[0].scored_participant_ids
+                            });
+                            
+                            resolve(comp);
+                        }
+                    });
+                }
+            });
+        });
+        
+        Promise.all(promises)
+            .then(results => {
+                console.log('✅ Judge competitions loaded with CORRECT progress tracking');
+                res.json(results);
+            })
+            .catch(err => {
+                console.error('❌ Error calculating progress:', err);
+                res.status(500).json({ error: 'Error calculating progress: ' + err.message });
+            });
     });
 });
+
+app.get('/judge-pageant-progress/:judgeId/:competitionId', (req, res) => {
+    const { judgeId, competitionId } = req.params;
+    
+    const sql = `
+        SELECT 
+            p.participant_id,
+            p.participant_name,
+            p.contestant_number,
+            ps.segment_id,
+            ps.segment_name,
+            ps.day_number,
+            ps.order_number,
+            CASE 
+                WHEN os.score_id IS NOT NULL THEN TRUE 
+                ELSE FALSE 
+            END as is_scored
+        FROM participants p
+        CROSS JOIN pageant_segments ps
+        LEFT JOIN overall_scores os 
+            ON p.participant_id = os.participant_id 
+            AND ps.segment_id = os.segment_id 
+            AND os.judge_id = ?
+        WHERE p.competition_id = ? 
+            AND ps.competition_id = ?
+            AND ps.is_active = TRUE
+        ORDER BY p.participant_name, ps.day_number, ps.order_number
+    `;
+    
+    db.query(sql, [judgeId, competitionId, competitionId], (err, result) => {
+        if (err) {
+            console.error('Error fetching pageant progress:', err);
+            return res.status(500).json({ error: 'Error fetching progress' });
+        }
+        
+        // Group by participant
+        const participantProgress = {};
+        
+        result.forEach(row => {
+            if (!participantProgress[row.participant_id]) {
+                participantProgress[row.participant_id] = {
+                    participant_id: row.participant_id,
+                    participant_name: row.participant_name,
+                    contestant_number: row.contestant_number,
+                    segments: [],
+                    scored_count: 0,
+                    total_segments: 0
+                };
+            }
+            
+            participantProgress[row.participant_id].segments.push({
+                segment_id: row.segment_id,
+                segment_name: row.segment_name,
+                day_number: row.day_number,
+                order_number: row.order_number,
+                is_scored: row.is_scored
+            });
+            
+            participantProgress[row.participant_id].total_segments++;
+            
+            if (row.is_scored) {
+                participantProgress[row.participant_id].scored_count++;
+            }
+        });
+        
+        res.json({
+            participants: Object.values(participantProgress),
+            summary: {
+                total_participants: Object.keys(participantProgress).length,
+                total_segments: result.length,
+                scored_segments: result.filter(r => r.is_scored).length
+            }
+        });
+    });
+});
+
+
+
+console.log(' Fixed endpoint loaded - Pageant scoring progress now shows correctly');
 
 app.post('/add-judge', (req, res) => {
     const { 
@@ -618,76 +913,7 @@ app.delete('/delete-judge/:id', (req, res) => {
 // ================================================
 // DETAILED SCORING ENDPOINTS (New)
 // ================================================
-app.post('/submit-detailed-scores', (req, res) => {
-    const { judge_id, participant_id, competition_id, scores, general_comments } = req.body;
-    
-    if (!judge_id || !participant_id || !competition_id || !scores || scores.length === 0) {
-        return res.status(400).json({ error: 'Required fields missing' });
-    }
 
-    // First, delete existing detailed scores for this judge-participant combination
-    db.query('DELETE FROM detailed_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ?', 
-        [judge_id, participant_id, competition_id], (err) => {
-        if (err) {
-            console.error('Error deleting old scores:', err);
-            return res.status(500).json({ error: 'Error updating scores' });
-        }
-
-        // Calculate total weighted score
-        let totalScore = 0;
-        
-        // Insert each detailed score
-        const insertPromises = scores.map(score => {
-            const weightedScore = (score.score * score.percentage) / 100;
-            totalScore += weightedScore;
-            
-            return new Promise((resolve, reject) => {
-                const sql = `
-                    INSERT INTO detailed_scores 
-                    (judge_id, participant_id, competition_id, criteria_id, score, weighted_score, comments) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `;
-                db.query(sql, [
-                    judge_id, participant_id, competition_id, 
-                    score.criteria_id, score.score, weightedScore, score.comments
-                ], (err, result) => {
-                    if (err) reject(err);
-                    else resolve(result);
-                });
-            });
-        });
-
-        Promise.all(insertPromises)
-            .then(() => {
-                // Insert/update overall score
-                const overallSql = `
-                    INSERT INTO overall_scores (judge_id, participant_id, competition_id, total_score, general_comments)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE 
-                    total_score = VALUES(total_score), 
-                    general_comments = VALUES(general_comments),
-                    updated_at = CURRENT_TIMESTAMP
-                `;
-                
-                db.query(overallSql, [judge_id, participant_id, competition_id, totalScore, general_comments], (err) => {
-                    if (err) {
-                        console.error('Error saving overall score:', err);
-                        return res.status(500).json({ error: 'Error saving overall score' });
-                    }
-                    
-                    res.json({ 
-                        success: true, 
-                        message: 'Detailed scores submitted successfully!',
-                        total_score: totalScore
-                    });
-                });
-            })
-            .catch(err => {
-                console.error('Error inserting detailed scores:', err);
-                res.status(500).json({ error: 'Error saving detailed scores' });
-            });
-    });
-});
 
 app.get('/participant-scores/:participantId/:competitionId', (req, res) => {
     const { participantId, competitionId } = req.params;
@@ -729,24 +955,7 @@ app.get('/detailed-scores/:competitionId', (req, res) => {
     });
 });
 
-app.get('/overall-scores/:competitionId', (req, res) => {
-    const { competitionId } = req.params;
-    const sql = `
-        SELECT os.*, j.judge_name, p.participant_name, p.performance_title
-        FROM overall_scores os
-        JOIN judges j ON os.judge_id = j.judge_id
-        JOIN participants p ON os.participant_id = p.participant_id
-        WHERE os.competition_id = ?
-        ORDER BY p.participant_name, os.total_score DESC
-    `;
-    db.query(sql, [competitionId], (err, result) => {
-        if (err) {
-            console.error('Error fetching overall scores:', err);
-            return res.status(500).json({ error: 'Error fetching overall scores' });
-        }
-        res.json(result);
-    });
-});
+
 
 // ================================================
 // CRITERIA TEMPLATES ENDPOINTS (New)
@@ -932,53 +1141,7 @@ app.post('/create-pageant-segment', (req, res) => {
     });
 });
 
-// Submit pageant segment scores
-app.post('/submit-segment-scores', (req, res) => {
-    const { judge_id, participant_id, segment_id, scores } = req.body;
-    
-    if (!judge_id || !participant_id || !segment_id || !scores || scores.length === 0) {
-        return res.status(400).json({ error: 'Required fields missing' });
-    }
 
-    // Delete existing scores for this segment
-    db.query('DELETE FROM pageant_segment_scores WHERE judge_id = ? AND participant_id = ? AND segment_id = ?', 
-        [judge_id, participant_id, segment_id], (err) => {
-        if (err) {
-            console.error('Error deleting old segment scores:', err);
-            return res.status(500).json({ error: 'Error updating scores' });
-        }
-
-        // Insert new scores
-        const insertPromises = scores.map(score => {
-            return new Promise((resolve, reject) => {
-                const sql = `
-                    INSERT INTO pageant_segment_scores 
-                    (judge_id, participant_id, segment_id, criteria_id, score, weighted_score, comments) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `;
-                db.query(sql, [
-                    judge_id, participant_id, segment_id, 
-                    score.criteria_id, score.score, score.weighted_score, score.comments
-                ], (err, result) => {
-                    if (err) reject(err);
-                    else resolve(result);
-                });
-            });
-        });
-
-        Promise.all(insertPromises)
-            .then(() => {
-                res.json({ 
-                    success: true, 
-                    message: 'Segment scores submitted successfully!'
-                });
-            })
-            .catch(err => {
-                console.error('Error inserting segment scores:', err);
-                res.status(500).json({ error: 'Error saving segment scores' });
-            });
-    });
-});
 // Flexible Pageant Creation Endpoint
 app.post('/create-flexible-pageant', (req, res) => {
     console.log('Received pageant data:', JSON.stringify(req.body, null, 2));
@@ -1074,11 +1237,7 @@ app.post('/create-flexible-pageant', (req, res) => {
         });
     });
 });
-app.listen(port, () => {
-    console.log(`running na sya guys http://localhost:${port}`);
-   ;
 
-});
 app.get('/pageant-segments/:competitionId', (req, res) => {
     const { competitionId } = req.params;
     
@@ -1134,146 +1293,16 @@ app.get('/pageant-segment-scores/:segmentId/:participantId/:judgeId', (req, res)
     });
 });
 
-// Submit segment scores - FIXED VERSION
-app.post('/submit-segment-scores', (req, res) => {
-    const { judge_id, participant_id, segment_id, scores, general_comments, total_score } = req.body;
-    
-    if (!judge_id || !participant_id || !segment_id || !scores || scores.length === 0) {
-        return res.status(400).json({ 
-            success: false,
-            error: 'Required fields missing' 
-        });
-    }
 
-    // Start transaction
-    db.beginTransaction((err) => {
-        if (err) {
-            console.error('Transaction error:', err);
-            return res.status(500).json({ 
-                success: false,
-                error: 'Database transaction error' 
-            });
-        }
 
-        // Delete existing scores for this judge-participant-segment combination
-        const deleteSql = `
-            DELETE FROM pageant_segment_scores 
-            WHERE judge_id = ? AND participant_id = ? AND segment_id = ?
-        `;
-        
-        db.query(deleteSql, [judge_id, participant_id, segment_id], (err) => {
-            if (err) {
-                return db.rollback(() => {
-                    console.error('Error deleting old scores:', err);
-                    res.status(500).json({ 
-                        success: false,
-                        error: 'Error updating scores' 
-                    });
-                });
-            }
 
-            // Insert new scores
-            const insertPromises = scores.map(score => {
-                return new Promise((resolve, reject) => {
-                    const sql = `
-                        INSERT INTO pageant_segment_scores 
-                        (judge_id, participant_id, segment_id, criteria_id, score, weighted_score, comments) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    `;
-                    
-                    db.query(sql, [
-                        judge_id, 
-                        participant_id, 
-                        segment_id, 
-                        score.criteria_id, 
-                        score.score, 
-                        score.weighted_score, 
-                        score.comments || null
-                    ], (err, result) => {
-                        if (err) reject(err);
-                        else resolve(result);
-                    });
-                });
-            });
 
-            Promise.all(insertPromises)
-            .then(() => {
-                // Get competition_id from segment
-                const getCompSql = 'SELECT competition_id FROM pageant_segments WHERE segment_id = ?';
-                db.query(getCompSql, [segment_id], (err, result) => {
-                    if (err || result.length === 0) {
-                        return db.rollback(() => {
-                            res.status(500).json({ 
-                                success: false,
-                                error: 'Error retrieving competition info' 
-                            });
-                        });
-                    }
 
-                    const competition_id = result[0].competition_id;
 
-                    // Update or insert overall segment score summary
-                    const overallSql = `
-                        INSERT INTO overall_scores 
-                        (judge_id, participant_id, competition_id, total_score, general_comments, segment_id)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON DUPLICATE KEY UPDATE 
-                        total_score = VALUES(total_score), 
-                        general_comments = VALUES(general_comments),
-                        updated_at = CURRENT_TIMESTAMP
-                    `;
-                    
-                    db.query(overallSql, [
-                        judge_id, 
-                        participant_id, 
-                        competition_id, 
-                        total_score || 0, 
-                        general_comments || null, 
-                        segment_id
-                    ], (err) => {
-                        if (err) {
-                            return db.rollback(() => {
-                                console.error('Error saving overall score:', err);
-                                res.status(500).json({ 
-                                    success: false,
-                                    error: 'Error saving overall score' 
-                                });
-                            });
-                        }
 
-                        // Commit transaction
-                        db.commit((err) => {
-                            if (err) {
-                                return db.rollback(() => {
-                                    console.error('Commit error:', err);
-                                    res.status(500).json({ 
-                                        success: false,
-                                        error: 'Error committing scores' 
-                                    });
-                                });
-                            }
 
-                            res.json({ 
-                                success: true, 
-                                message: 'Segment scores submitted successfully!',
-                                total_score: total_score
-                            });
-                        });
-                    });
-                });
-            })
-            .catch(err => {
-                db.rollback(() => {
-                    console.error('Error inserting segment scores:', err);
-                    res.status(500).json({ 
-                        success: false,
-                        error: 'Error saving segment scores' 
-                    });
-                });
-            });
-        });
-    });
-});
+
+console.log('✅ FIXED: Single countdown - scores saved unlocked, frontend locks after 10 seconds');
 
 // Get all segment scores for a competition (for reporting)
 app.get('/competition-segment-scores/:competitionId', (req, res) => {
@@ -1344,38 +1373,244 @@ app.get('/participant-total-pageant-score/:participantId/:competitionId', (req, 
     });
 });
 
-// Get pageant leaderboard
+
 app.get('/pageant-leaderboard/:competitionId', (req, res) => {
     const { competitionId } = req.params;
     
+    // Step 1: Get all segment scores grouped by participant and segment
     const sql = `
         SELECT 
             p.participant_id,
             p.participant_name,
+            p.contestant_number,
             p.performance_title,
-            AVG(os.total_score) as average_score,
-            COUNT(DISTINCT os.judge_id) as judge_count,
-            COUNT(DISTINCT pss.segment_id) as segments_scored
+            ps.segment_id,
+            ps.segment_name,
+            ps.day_number,
+            os.judge_id,
+            os.total_score
         FROM participants p
-        LEFT JOIN overall_scores os ON p.participant_id = os.participant_id 
-            AND os.competition_id = ?
-        LEFT JOIN pageant_segment_scores pss ON p.participant_id = pss.participant_id
-        LEFT JOIN pageant_segments ps ON pss.segment_id = ps.segment_id 
-            AND ps.competition_id = ?
-        WHERE p.competition_id = ?
-        GROUP BY p.participant_id, p.participant_name, p.performance_title
-        HAVING average_score IS NOT NULL
-        ORDER BY average_score DESC
+        JOIN overall_scores os ON p.participant_id = os.participant_id
+        JOIN pageant_segments ps ON os.segment_id = ps.segment_id
+        WHERE ps.competition_id = ? AND ps.is_active = TRUE
+        ORDER BY p.participant_id, ps.day_number, ps.order_number
     `;
     
-    db.query(sql, [competitionId, competitionId, competitionId], (err, result) => {
+    db.query(sql, [competitionId], (err, result) => {
         if (err) {
-            console.error('Error fetching pageant leaderboard:', err);
-            return res.status(500).json({ error: 'Error fetching leaderboard' });
+            console.error('❌ Error fetching pageant leaderboard:', err);
+            return res.status(500).json({ error: 'Error fetching leaderboard: ' + err.message });
         }
-        res.json(result);
+        
+        if (result.length === 0) {
+            return res.json([]);
+        }
+        
+        // Step 2: Group scores by participant and segment
+        const participantMap = {};
+        
+        result.forEach(row => {
+            if (!participantMap[row.participant_id]) {
+                participantMap[row.participant_id] = {
+                    participant_id: row.participant_id,
+                    participant_name: row.participant_name,
+                    contestant_number: row.contestant_number,
+                    performance_title: row.performance_title,
+                    segments: {},
+                    judges: new Set(),
+                    segments_completed: new Set()
+                };
+            }
+            
+            const participant = participantMap[row.participant_id];
+            participant.judges.add(row.judge_id);
+            participant.segments_completed.add(row.segment_id);
+            
+            // Group by segment
+            if (!participant.segments[row.segment_id]) {
+                participant.segments[row.segment_id] = {
+                    name: row.segment_name,
+                    day_number: row.day_number,
+                    scores: []
+                };
+            }
+            
+            participant.segments[row.segment_id].scores.push(row.total_score);
+        });
+        
+        // Step 3: Calculate SEGMENT AVERAGES first, then overall average
+        const leaderboard = Object.values(participantMap).map(participant => {
+            const segmentAverages = [];
+            
+            // For each segment, calculate the average across all judges
+            Object.values(participant.segments).forEach(segment => {
+                const sum = segment.scores.reduce((acc, score) => acc + parseFloat(score), 0);
+                const average = sum / segment.scores.length;
+                segmentAverages.push(average);
+            });
+            
+            // Overall average is the average of segment averages
+            const overallAverage = segmentAverages.length > 0 
+                ? segmentAverages.reduce((acc, avg) => acc + avg, 0) / segmentAverages.length 
+                : 0;
+            
+            return {
+                participant_id: participant.participant_id,
+                participant_name: participant.participant_name,
+                contestant_number: participant.contestant_number,
+                performance_title: participant.performance_title,
+                average_score: overallAverage.toFixed(2),
+                judge_count: participant.judges.size,
+                segments_completed: participant.segments_completed.size
+            };
+        });
+        
+        // Step 4: Sort by average score descending
+        leaderboard.sort((a, b) => parseFloat(b.average_score) - parseFloat(a.average_score));
+        
+        console.log('✅ Pageant leaderboard calculated correctly with segment averaging');
+        res.json(leaderboard);
     });
 });
+
+
+
+app.get('/overall-scores/:competitionId', (req, res) => {
+    const { competitionId } = req.params;
+    
+    // First, check if this is a pageant competition
+    db.query('SELECT is_pageant FROM competitions c JOIN event_types et ON c.event_type_id = et.event_type_id WHERE c.competition_id = ?', 
+        [competitionId], (err, compResult) => {
+        
+        if (err || compResult.length === 0) {
+            console.error('Error checking competition type:', err);
+            return res.status(500).json({ error: 'Error fetching competition' });
+        }
+        
+        const isPageant = compResult[0].is_pageant;
+        
+        if (isPageant) {
+            // FOR PAGEANTS: Use the SAME calculation as /pageant-leaderboard
+            console.log('📊 Fetching PAGEANT scores with segment averaging for competition:', competitionId);
+            
+            const sql = `
+                SELECT 
+                    p.participant_id,
+                    p.participant_name,
+                    p.contestant_number,
+                    p.performance_title,
+                    ps.segment_id,
+                    ps.segment_name,
+                    ps.day_number,
+                    os.judge_id,
+                    j.judge_name,
+                    os.total_score
+                FROM participants p
+                JOIN overall_scores os ON p.participant_id = os.participant_id
+                JOIN judges j ON os.judge_id = j.judge_id
+                JOIN pageant_segments ps ON os.segment_id = ps.segment_id
+                WHERE ps.competition_id = ? AND ps.is_active = TRUE
+                ORDER BY p.participant_id, ps.day_number, ps.order_number, os.judge_id
+            `;
+            
+            db.query(sql, [competitionId], (err, result) => {
+                if (err) {
+                    console.error('❌ Error fetching pageant scores:', err);
+                    return res.status(500).json({ error: 'Error fetching scores' });
+                }
+                
+                if (result.length === 0) {
+                    return res.json([]);
+                }
+                
+                // STEP 1: Group by participant and segment
+                const participantMap = {};
+                
+                result.forEach(row => {
+                    if (!participantMap[row.participant_id]) {
+                        participantMap[row.participant_id] = {
+                            participant_id: row.participant_id,
+                            participant_name: row.participant_name,
+                            contestant_number: row.contestant_number,
+                            performance_title: row.performance_title,
+                            segments: {},
+                            all_judges: new Set()
+                        };
+                    }
+                    
+                    const participant = participantMap[row.participant_id];
+                    participant.all_judges.add(row.judge_id);
+                    
+                    // Group by segment
+                    if (!participant.segments[row.segment_id]) {
+                        participant.segments[row.segment_id] = {
+                            segment_name: row.segment_name,
+                            day_number: row.day_number,
+                            scores: []
+                        };
+                    }
+                    
+                    participant.segments[row.segment_id].scores.push({
+                        judge_name: row.judge_name,
+                        score: parseFloat(row.total_score)
+                    });
+                });
+                
+                // STEP 2: Calculate SEGMENT AVERAGES first, then OVERALL AVERAGE
+                const finalScores = Object.values(participantMap).map(participant => {
+                    const segmentAverages = [];
+                    
+                    // For each segment, calculate average of judge scores
+                    Object.values(participant.segments).forEach(segment => {
+                        const sum = segment.scores.reduce((acc, s) => acc + s.score, 0);
+                        const average = sum / segment.scores.length;
+                        segmentAverages.push(average);
+                    });
+                    
+                    // Overall average is the average of segment averages
+                    const overallAverage = segmentAverages.reduce((acc, avg) => acc + avg, 0) / segmentAverages.length;
+                    
+                    return {
+                        participant_id: participant.participant_id,
+                        participant_name: participant.participant_name,
+                        contestant_number: participant.contestant_number,
+                        performance_title: participant.performance_title,
+                        total_score: overallAverage.toFixed(2),
+                        judge_name: `${participant.all_judges.size} judges`,
+                        judge_count: participant.all_judges.size,
+                        segments_completed: Object.keys(participant.segments).length
+                    };
+                });
+                
+                console.log('✅ Pageant scores calculated with CORRECT segment averaging');
+                res.json(finalScores);
+            });
+            
+        } else {
+            // FOR REGULAR COMPETITIONS: Standard query
+            console.log('📊 Fetching REGULAR competition scores for competition:', competitionId);
+            
+            const sql = `
+                SELECT os.*, j.judge_name, p.participant_name, p.performance_title
+                FROM overall_scores os
+                JOIN judges j ON os.judge_id = j.judge_id
+                JOIN participants p ON os.participant_id = p.participant_id
+                WHERE os.competition_id = ? AND os.segment_id IS NULL
+                ORDER BY p.participant_name, os.total_score DESC
+            `;
+            
+            db.query(sql, [competitionId], (err, result) => {
+                if (err) {
+                    console.error('❌ Error fetching regular scores:', err);
+                    return res.status(500).json({ error: 'Error fetching scores' });
+                }
+                res.json(result);
+            });
+        }
+    });
+});
+
+console.log('✅ FIXED: Multi-day pageant scoring now calculates segment averages correctly!');
 
 // Get segment scores for editing
 app.get('/pageant-segment-scores/:segmentId/:participantId/:judgeId', (req, res) => {
@@ -1418,6 +1653,59 @@ app.get('/segment-criteria/:segmentId', (req, res) => {
         res.json(result);
     });
 });
+
+
+
+
+// ================================================
+// FIXED: Delete draft - TWO ROUTES (no optional params)
+// ================================================
+
+// Delete draft WITH segmentId
+app.delete('/delete-draft-scores/:judgeId/:participantId/:competitionId/:segmentId', (req, res) => {
+    const { judgeId, participantId, competitionId, segmentId } = req.params;
+    
+    let sql = 'DELETE FROM draft_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id = ?';
+    
+    db.query(sql, [judgeId, participantId, competitionId, segmentId], (err, result) => {
+        if (err) {
+            return res.status(500).json({ 
+                success: false, 
+                error: err.message 
+            });
+        }
+        
+        res.json({ 
+            success: true,
+            deleted: result.affectedRows > 0
+        });
+    });
+});
+
+// Delete draft WITHOUT segmentId (regular competition)
+app.delete('/delete-draft-scores/:judgeId/:participantId/:competitionId', (req, res) => {
+    const { judgeId, participantId, competitionId } = req.params;
+    
+    let sql = 'DELETE FROM draft_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id IS NULL';
+    
+    db.query(sql, [judgeId, participantId, competitionId], (err, result) => {
+        if (err) {
+            return res.status(500).json({ 
+                success: false, 
+                error: err.message 
+            });
+        }
+        
+        res.json({ 
+            success: true,
+            deleted: result.affectedRows > 0
+        });
+    });
+});
+
+console.log('✅ Fixed draft endpoints loaded (4 routes total)');
+
+console.log('✅ Fixed draft endpoints loaded');
 
 // Assign criteria to a segment
 app.post('/assign-segment-criteria', (req, res) => {
@@ -1471,3 +1759,986 @@ app.post('/assign-segment-criteria', (req, res) => {
     });
 });
 console.log('✅ Pageant Segment Scoring Endpoints Added');
+
+
+app.post('/submit-detailed-scores', (req, res) => {
+    const { judge_id, participant_id, competition_id, scores, general_comments } = req.body;
+    
+    console.log('📥 Submitting REGULAR competition scores:', { 
+        judge_id, 
+        participant_id, 
+        competition_id,
+        scores_count: scores ? scores.length : 0 
+    });
+    
+    if (!judge_id || !participant_id || !competition_id || !scores || scores.length === 0) {
+        console.error('❌ Missing required fields:', { judge_id, participant_id, competition_id, has_scores: !!scores });
+        return res.status(400).json({ error: 'Required fields missing' });
+    }
+
+    // Delete old detailed scores
+    db.query('DELETE FROM detailed_scores WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id IS NULL', 
+        [judge_id, participant_id, competition_id], (err) => {
+        if (err) {
+            console.error('❌ Error deleting old scores:', err);
+            return res.status(500).json({ error: 'Error updating scores' });
+        }
+
+        let totalScore = 0;
+        
+        const insertPromises = scores.map(score => {
+            const weightedScore = (score.score * score.percentage) / 100;
+            totalScore += weightedScore;
+            
+            return new Promise((resolve, reject) => {
+                const sql = `
+                    INSERT INTO detailed_scores 
+                    (judge_id, participant_id, competition_id, segment_id, criteria_id, score, weighted_score, comments) 
+                    VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                `;
+                db.query(sql, [
+                    judge_id, participant_id, competition_id, 
+                    score.criteria_id, score.score, weightedScore, score.comments || null
+                ], (err, result) => {
+                    if (err) {
+                        console.error('❌ Error inserting detailed score:', err);
+                        reject(err);
+                    } else {
+                        console.log('✅ Detailed score inserted, ID:', result.insertId);
+                        resolve(result);
+                    }
+                });
+            });
+        });
+
+        Promise.all(insertPromises)
+            .then(() => {
+                console.log('✅ All detailed scores inserted. Total:', totalScore.toFixed(2));
+                
+                // CRITICAL: Insert into overall_scores with segment_id = NULL
+                const overallSql = `
+                    INSERT INTO overall_scores 
+                    (judge_id, participant_id, competition_id, segment_id, total_score, general_comments, is_locked, locked_at)
+                    VALUES (?, ?, ?, NULL, ?, ?, FALSE, NULL)
+                    ON DUPLICATE KEY UPDATE 
+                    total_score = VALUES(total_score), 
+                    general_comments = VALUES(general_comments),
+                    is_locked = FALSE,
+                    locked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                `;
+                
+                db.query(overallSql, [judge_id, participant_id, competition_id, totalScore, general_comments || null], (err, result) => {
+                    if (err) {
+                        console.error('❌ Error saving overall score:', err);
+                        return res.status(500).json({ 
+                            success: false,
+                            error: 'Error saving overall score: ' + err.message 
+                        });
+                    }
+                    
+                    console.log('✅ Overall score saved successfully:', {
+                        judge_id,
+                        participant_id,
+                        competition_id,
+                        total_score: totalScore.toFixed(2),
+                        affected_rows: result.affectedRows
+                    });
+                    
+                    res.json({ 
+                        success: true, 
+                        message: 'Scores submitted successfully!',
+                        total_score: totalScore,
+                        should_start_countdown: true
+                    });
+                });
+            })
+            .catch(err => {
+                console.error('❌ Error inserting detailed scores:', err);
+                res.status(500).json({ 
+                    success: false,
+                    error: 'Error saving detailed scores: ' + err.message 
+                });
+            });
+    });
+});
+
+console.log('✅ FIXED: /submit-detailed-scores endpoint now properly saves with segment_id = NULL');
+
+
+// ==========================================
+// PAGEANT: submit per-segment scores (judge)
+// ==========================================
+app.post('/submit-segment-scores', (req, res) => {
+  const { judge_id, participant_id, segment_id, scores, general_comments, total_score } = req.body;
+
+  if (!judge_id || !participant_id || !segment_id || !Array.isArray(scores) || scores.length === 0) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+
+  // Step 1: remove any previous scores for this judge+participant+segment (safe re-submit)
+  const deleteDetailsSql = `
+    DELETE FROM pageant_segment_scores
+    WHERE judge_id = ? AND participant_id = ? AND segment_id = ?
+  `;
+  db.query(deleteDetailsSql, [judge_id, participant_id, segment_id], (delErr) => {
+    if (delErr) {
+      console.error('❌ Error clearing old pageant_segment_scores:', delErr);
+      return res.status(500).json({ success: false, error: 'Error updating segment scores' });
+    }
+
+    // Step 2: insert per-criteria rows
+    const insertDetailSql = `
+      INSERT INTO pageant_segment_scores
+        (judge_id, participant_id, segment_id, criteria_id, score, weighted_score, comments)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    let computedTotal = 0;
+    const inserts = scores.map(s => {
+      const sc = parseFloat(s.score) || 0;
+      const w  = parseFloat(s.weighted_score) || 0;
+      computedTotal += w;
+      return new Promise((resolve, reject) => {
+        db.query(
+          insertDetailSql,
+          [judge_id, participant_id, segment_id, s.criteria_id, sc, w, s.comments || null],
+          (err) => err ? reject(err) : resolve()
+        );
+      });
+    });
+
+    Promise.all(inserts).then(() => {
+      // Step 3: upsert the segment total in overall_scores (with segment_id!)
+      const upsertOverallSql = `
+        INSERT INTO overall_scores (judge_id, participant_id, competition_id, segment_id, total_score, is_locked, locked_at)
+        SELECT ?, ?, ps.competition_id, ?, ?, FALSE, NULL
+        FROM pageant_segments ps
+        WHERE ps.segment_id = ?
+        ON DUPLICATE KEY UPDATE total_score = VALUES(total_score), updated_at = NOW()
+      `;
+
+      const total = (typeof total_score === 'number') ? total_score : computedTotal;
+
+      db.query(
+        upsertOverallSql,
+        [judge_id, participant_id, segment_id, total, segment_id],
+        (ovErr) => {
+          if (ovErr) {
+            console.error('❌ Error upserting overall_scores (pageant):', ovErr);
+            return res.status(500).json({ success: false, error: 'Error saving segment total' });
+          }
+
+          // Optional: store a copy of judge’s general comments into detailed table as a note row,
+          // or keep it separate if you have another place. Skipped here.
+
+          // Tell the frontend it may start the short auto-lock countdown
+          res.json({
+            success: true,
+            message: 'Segment scores saved',
+            should_start_countdown: true
+          });
+        }
+      );
+    }).catch((insErr) => {
+      console.error('❌ Error inserting pageant segment scores:', insErr);
+      res.status(500).json({ success: false, error: 'Error inserting segment scores' });
+    });
+  });
+});
+
+
+
+// ==========================================
+// 3. DRAFT ENDPOINTS
+// ==========================================
+
+// Save draft (works for both pageant & regular)
+app.post('/save-draft-scores', (req, res) => {
+    const { judge_id, participant_id, segment_id, scores, general_comments, total_score } = req.body;
+    
+    console.log('💾 Saving draft:', { judge_id, participant_id, segment_id: segment_id || 'NULL (regular)' });
+    
+    if (!judge_id || !participant_id) {
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+    
+    const draftData = JSON.stringify({ 
+        scores: scores || [], 
+        general_comments: general_comments || '', 
+        total_score: total_score || 0 
+    });
+    
+    const sql = `
+        INSERT INTO draft_scores (judge_id, participant_id, segment_id, draft_data, saved_at)
+        VALUES (?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE draft_data = VALUES(draft_data), saved_at = NOW()
+    `;
+    
+    db.query(sql, [judge_id, participant_id, segment_id || null, draftData], (err) => {
+        if (err) {
+            console.error('❌ Draft save error:', err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        console.log('✅ Draft saved');
+        res.json({ success: true, message: 'Draft saved' });
+    });
+});
+
+// Get draft - FOR PAGEANTS (with segment_id)
+app.get('/get-draft-scores/:judgeId/:participantId/:segmentId', (req, res) => {
+    const { judgeId, participantId, segmentId } = req.params;
+    
+    console.log('📥 Getting PAGEANT draft:', { judgeId, participantId, segmentId });
+    
+    const sql = `
+        SELECT draft_data, saved_at 
+        FROM draft_scores 
+        WHERE judge_id = ? AND participant_id = ? AND segment_id = ?
+    `;
+    
+    db.query(sql, [judgeId, participantId, segmentId], (err, result) => {
+        if (err) {
+            console.error('❌ Error getting draft:', err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        if (result.length > 0) {
+            try {
+                const draft = JSON.parse(result[0].draft_data);
+                res.json({ success: true, draft: draft, saved_at: result[0].saved_at });
+            } catch (parseError) {
+                res.json({ success: false, message: 'Draft corrupted' });
+            }
+        } else {
+            res.json({ success: false, message: 'No draft found' });
+        }
+    });
+});
+
+// Get draft - FOR REGULAR (without segment_id)
+app.get('/get-draft-scores/:judgeId/:participantId', (req, res) => {
+    const { judgeId, participantId } = req.params;
+    
+    console.log('📥 Getting REGULAR draft:', { judgeId, participantId });
+    
+    const sql = `
+        SELECT draft_data, saved_at 
+        FROM draft_scores 
+        WHERE judge_id = ? AND participant_id = ? AND segment_id IS NULL
+    `;
+    
+    db.query(sql, [judgeId, participantId], (err, result) => {
+        if (err) {
+            console.error('❌ Error getting draft:', err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        
+        if (result.length > 0) {
+            try {
+                const draft = JSON.parse(result[0].draft_data);
+                res.json({ success: true, draft: draft, saved_at: result[0].saved_at });
+            } catch (parseError) {
+                res.json({ success: false, message: 'Draft corrupted' });
+            }
+        } else {
+            res.json({ success: false, message: 'No draft found' });
+        }
+    });
+});
+
+app.delete('/delete-draft-scores/:judgeId/:participantId/:segmentId', (req, res) => {
+    const { judgeId, participantId, segmentId } = req.params;
+    
+    console.log('🗑️ Deleting PAGEANT draft');
+    
+    const sql = 'DELETE FROM draft_scores WHERE judge_id = ? AND participant_id = ? AND segment_id = ?';
+    
+    db.query(sql, [judgeId, participantId, segmentId], (err, result) => {
+        if (err) {
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        res.json({ success: true, deleted: result.affectedRows > 0 });
+    });
+});
+
+// Delete draft - FOR REGULAR (without segmentId)
+app.delete('/delete-draft-scores/:judgeId/:participantId', (req, res) => {
+    const { judgeId, participantId } = req.params;
+    
+    console.log('🗑️ Deleting REGULAR draft');
+    
+    const sql = 'DELETE FROM draft_scores WHERE judge_id = ? AND participant_id = ? AND segment_id IS NULL';
+    
+    db.query(sql, [judgeId, participantId], (err, result) => {
+        if (err) {
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        res.json({ success: true, deleted: result.affectedRows > 0 });
+    });
+});
+
+// ==========================================
+// 4. LOCK CHECK ENDPOINTS
+// ==========================================
+
+// Check lock - FOR PAGEANTS (with segment_id)
+app.get('/check-score-lock/:judgeId/:participantId/:competitionId/:segmentId', (req, res) => {
+    const { judgeId, participantId, competitionId, segmentId } = req.params;
+    
+    console.log('🔍 Checking PAGEANT lock:', { judgeId, participantId, competitionId, segmentId });
+    
+    const sql = `
+        SELECT is_locked, locked_at, 
+               TIMESTAMPDIFF(SECOND, locked_at, NOW()) as seconds_since_lock
+        FROM overall_scores
+        WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id = ?
+    `;
+    
+    db.query(sql, [judgeId, participantId, competitionId, segmentId], (err, result) => {
+        if (err) {
+            console.error('Error checking lock:', err);
+            return res.status(500).json({ error: 'Error checking lock status' });
+        }
+        
+        if (result.length === 0) {
+            return res.json({ is_locked: false, can_edit: true, seconds_remaining: 10 });
+        }
+        
+        const score = result[0];
+        const secondsSinceLock = score.seconds_since_lock || 0;
+        const canEdit = !score.is_locked || secondsSinceLock < 10;
+        const secondsRemaining = Math.max(0, 10 - secondsSinceLock);
+        
+        res.json({
+            is_locked: score.is_locked,
+            locked_at: score.locked_at,
+            seconds_since_lock: secondsSinceLock,
+            can_edit: canEdit,
+            seconds_remaining: secondsRemaining
+        });
+    });
+});
+
+// Check lock - FOR REGULAR (without segment_id)
+app.get('/check-score-lock/:judgeId/:participantId/:competitionId', (req, res) => {
+    const { judgeId, participantId, competitionId } = req.params;
+    
+    console.log('🔍 Checking REGULAR lock:', { judgeId, participantId, competitionId });
+    
+    const sql = `
+        SELECT is_locked, locked_at, 
+               TIMESTAMPDIFF(SECOND, locked_at, NOW()) as seconds_since_lock
+        FROM overall_scores
+        WHERE judge_id = ? AND participant_id = ? AND competition_id = ? AND segment_id IS NULL
+    `;
+    
+    db.query(sql, [judgeId, participantId, competitionId], (err, result) => {
+        if (err) {
+            console.error('Error checking lock:', err);
+            return res.status(500).json({ error: 'Error checking lock status' });
+        }
+        
+        if (result.length === 0) {
+            return res.json({ is_locked: false, can_edit: true, seconds_remaining: 10 });
+        }
+        
+        const score = result[0];
+        const secondsSinceLock = score.seconds_since_lock || 0;
+        const canEdit = !score.is_locked || secondsSinceLock < 10;
+        const secondsRemaining = Math.max(0, 10 - secondsSinceLock);
+        
+        res.json({
+            is_locked: score.is_locked,
+            locked_at: score.locked_at,
+            seconds_since_lock: secondsSinceLock,
+            can_edit: canEdit,
+            seconds_remaining: secondsRemaining
+        });
+    });
+});
+
+// ==========================================
+// 5. AUTO-LOCK SCORE ENDPOINT
+// ==========================================
+app.post('/auto-lock-score', (req, res) => {
+    const { judge_id, participant_id, competition_id, segment_id, score_type } = req.body;
+    
+    console.log('🔒 Auto-locking score:', { judge_id, participant_id, competition_id, segment_id, score_type });
+    
+    let sql = `
+        UPDATE overall_scores
+        SET is_locked = TRUE, locked_at = NOW()
+        WHERE judge_id = ? AND participant_id = ? AND competition_id = ?
+    `;
+    
+    const params = [judge_id, participant_id, competition_id];
+    
+    if (segment_id && segment_id !== 'null' && segment_id !== 'undefined') {
+        sql += ' AND segment_id = ?';
+        params.push(segment_id);
+    } else {
+        sql += ' AND segment_id IS NULL';
+    }
+    
+    db.query(sql, params, (err, result) => {
+        if (err) {
+            console.error('❌ Auto-lock error:', err);
+            return res.status(500).json({ 
+                success: false,
+                error: 'Error locking score' 
+            });
+        }
+        
+        console.log('✅ Score locked immediately, affected rows:', result.affectedRows);
+        
+        res.json({ 
+            success: true, 
+            message: 'Score locked successfully',
+            affected_rows: result.affectedRows,
+            locked_at: new Date().toISOString()
+        });
+    });
+});
+
+// ==========================================
+// 6. UNLOCK REQUEST ENDPOINTS
+// ==========================================
+
+// Submit unlock request
+app.post('/request-unlock', (req, res) => {
+    const { judge_id, participant_id, segment_id, competition_id, reason, score_type } = req.body;
+    
+    console.log('📨 Unlock request received:', { judge_id, participant_id, competition_id, segment_id, score_type });
+    
+    if (!judge_id || !participant_id || !competition_id || !reason) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    const checkSql = `
+        SELECT * FROM unlock_requests 
+        WHERE judge_id = ? AND participant_id = ? AND competition_id = ?
+        AND (segment_id = ? OR (segment_id IS NULL AND ? IS NULL))
+        AND status = 'pending'
+    `;
+    
+    db.query(checkSql, [judge_id, participant_id, competition_id, segment_id || null, segment_id || null], (err, existing) => {
+        if (err) {
+            console.error('Error checking existing requests:', err);
+            return res.status(500).json({ error: 'Error checking existing requests' });
+        }
+        
+        if (existing.length > 0) {
+            return res.status(400).json({ 
+                error: 'You already have a pending unlock request for this score' 
+            });
+        }
+        
+        const sql = `
+            INSERT INTO unlock_requests 
+            (judge_id, participant_id, segment_id, competition_id, score_type, reason, status, requested_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
+        `;
+        
+        db.query(sql, [
+            judge_id, 
+            participant_id, 
+            segment_id || null, 
+            competition_id, 
+            score_type || 'overall', 
+            reason
+        ], (err, result) => {
+            if (err) {
+                console.error('Error creating unlock request:', err);
+                return res.status(500).json({ error: 'Error submitting unlock request' });
+            }
+            
+            console.log('✅ Unlock request created, ID:', result.insertId);
+            
+            res.json({ 
+                success: true, 
+                message: 'Unlock request submitted successfully! Admin will review it shortly.',
+                request_id: result.insertId
+            });
+        });
+    });
+});
+
+// Get all unlock requests (for admin)
+app.get('/unlock-requests', (req, res) => {
+    const sql = `
+        SELECT 
+            ur.*,
+            j.judge_name,
+            p.participant_name,
+            c.competition_name,
+            ps.segment_name,
+            u.username as reviewed_by_username,
+            TIMESTAMPDIFF(HOUR, ur.requested_at, NOW()) as hours_pending
+        FROM unlock_requests ur
+        JOIN judges j ON ur.judge_id = j.judge_id
+        JOIN participants p ON ur.participant_id = p.participant_id
+        JOIN competitions c ON ur.competition_id = c.competition_id
+        LEFT JOIN pageant_segments ps ON ur.segment_id = ps.segment_id
+        LEFT JOIN users u ON ur.reviewed_by_user_id = u.user_id
+        ORDER BY 
+            CASE ur.status 
+                WHEN 'pending' THEN 1 
+                WHEN 'approved' THEN 2 
+                WHEN 'rejected' THEN 3 
+            END,
+            ur.requested_at DESC
+    `;
+    
+    db.query(sql, (err, result) => {
+        if (err) {
+            console.error('Error fetching unlock requests:', err);
+            return res.status(500).json({ error: 'Error fetching unlock requests' });
+        }
+        res.json(result);
+    });
+});
+
+// Get unlock requests for a specific judge
+app.get('/unlock-requests/judge/:judgeId', (req, res) => {
+    const { judgeId } = req.params;
+    
+    const sql = `
+        SELECT 
+            ur.*,
+            p.participant_name,
+            c.competition_name,
+            ps.segment_name,
+            u.username as reviewed_by_username
+        FROM unlock_requests ur
+        JOIN participants p ON ur.participant_id = p.participant_id
+        JOIN competitions c ON ur.competition_id = c.competition_id
+        LEFT JOIN pageant_segments ps ON ur.segment_id = ps.segment_id
+        LEFT JOIN users u ON ur.reviewed_by_user_id = u.user_id
+        WHERE ur.judge_id = ?
+        ORDER BY ur.requested_at DESC
+    `;
+    
+    db.query(sql, [judgeId], (err, result) => {
+        if (err) {
+            console.error('Error fetching judge unlock requests:', err);
+            return res.status(500).json({ error: 'Error fetching unlock requests' });
+        }
+        res.json(result);
+    });
+});
+
+// Review unlock request (admin only)
+app.post('/review-unlock-request/:requestId', (req, res) => {
+    const { requestId } = req.params;
+    const { action, admin_notes, admin_user_id } = req.body;
+    
+    console.log('👨‍💼 Admin reviewing request:', requestId, 'Action:', action);
+    
+    if (!action || (action !== 'approve' && action !== 'reject')) {
+        return res.status(400).json({ error: 'Invalid action' });
+    }
+    
+    db.query('SELECT * FROM unlock_requests WHERE request_id = ?', [requestId], (err, requests) => {
+        if (err || requests.length === 0) {
+            return res.status(500).json({ error: 'Unlock request not found' });
+        }
+        
+        const request = requests[0];
+        
+        const updateRequestSql = `
+            UPDATE unlock_requests 
+            SET status = ?, reviewed_by_user_id = ?, reviewed_at = NOW(), admin_notes = ?
+            WHERE request_id = ?
+        `;
+        
+        const newStatus = action === 'approve' ? 'approved' : 'rejected';
+        
+        db.query(updateRequestSql, [newStatus, admin_user_id, admin_notes, requestId], (err) => {
+            if (err) {
+                console.error('Error updating unlock request:', err);
+                return res.status(500).json({ error: 'Error updating unlock request' });
+            }
+            
+            console.log('✅ Request status updated to:', newStatus);
+            
+            if (action === 'approve') {
+                let unlockSql = `
+                    UPDATE overall_scores
+                    SET is_locked = FALSE, locked_at = NULL
+                    WHERE judge_id = ? AND participant_id = ? AND competition_id = ?
+                `;
+                
+                const unlockParams = [request.judge_id, request.participant_id, request.competition_id];
+                
+                if (request.segment_id) {
+                    unlockSql += ' AND segment_id = ?';
+                    unlockParams.push(request.segment_id);
+                } else {
+                    unlockSql += ' AND segment_id IS NULL';
+                }
+                
+                db.query(unlockSql, unlockParams, (err, unlockResult) => {
+                    if (err) {
+                        console.error('Error unlocking score:', err);
+                        return res.status(500).json({ error: 'Error unlocking score' });
+                    }
+                    
+                    console.log('✅ Score unlocked, affected rows:', unlockResult.affectedRows);
+                    
+                    const historySql = `
+                        INSERT INTO score_edit_history 
+                        (judge_id, participant_id, competition_id, segment_id, score_type, edit_type, edited_by_user_id, edit_reason, edited_at)
+                        VALUES (?, ?, ?, ?, ?, 'admin_unlock', ?, ?, NOW())
+                    `;
+                    
+                    db.query(historySql, [
+                        request.judge_id, 
+                        request.participant_id, 
+                        request.competition_id,
+                        request.segment_id,
+                        request.score_type,
+                        admin_user_id,
+                        admin_notes || 'Admin approved unlock request'
+                    ]);
+                    
+                    res.json({ 
+                        success: true, 
+                        message: 'Unlock request approved! Judge can now edit the score.',
+                        action: 'approved'
+                    });
+                });
+            } else {
+                res.json({ 
+                    success: true, 
+                    message: 'Unlock request rejected.',
+                    action: 'rejected'
+                });
+            }
+        });
+    });
+});
+
+
+app.get('/segment-weights/:competitionId', (req, res) => {
+    const { competitionId } = req.params;
+    
+    const sql = `
+        SELECT segment_id, segment_name, segment_weight, day_number, order_number
+        FROM pageant_segments
+        WHERE competition_id = ? AND is_active = TRUE
+        ORDER BY day_number, order_number
+    `;
+    
+    db.query(sql, [competitionId], (err, result) => {
+        if (err) {
+            console.error('Error fetching segment weights:', err);
+            return res.status(500).json({ error: 'Error fetching segment weights' });
+        }
+        
+        // Calculate total weight
+        const totalWeight = result.reduce((sum, seg) => sum + parseFloat(seg.segment_weight || 0), 0);
+        
+        res.json({
+            segments: result,
+            total_weight: totalWeight,
+            is_valid: Math.abs(totalWeight - 100) < 0.1
+        });
+    });
+});
+
+// Update segment weights
+app.post('/update-segment-weights', (req, res) => {
+    const { competition_id, segments } = req.body;
+    
+    if (!competition_id || !segments || segments.length === 0) {
+        return res.status(400).json({ error: 'Competition ID and segments required' });
+    }
+    
+    // Validate total weight equals 100%
+    const totalWeight = segments.reduce((sum, seg) => sum + parseFloat(seg.weight || 0), 0);
+    
+    if (Math.abs(totalWeight - 100) > 0.1) {
+        return res.status(400).json({ 
+            error: `Total weight must equal 100%. Current total: ${totalWeight.toFixed(2)}%` 
+        });
+    }
+    
+    // Update each segment weight
+    const updatePromises = segments.map(segment => {
+        return new Promise((resolve, reject) => {
+            const sql = 'UPDATE pageant_segments SET segment_weight = ? WHERE segment_id = ?';
+            db.query(sql, [segment.weight, segment.segment_id], (err, result) => {
+                if (err) reject(err);
+                else resolve(result);
+            });
+        });
+    });
+    
+    Promise.all(updatePromises)
+        .then(() => {
+            res.json({ 
+                success: true, 
+                message: 'Segment weights updated successfully!',
+                total_weight: totalWeight
+            });
+        })
+        .catch(err => {
+            console.error('Error updating segment weights:', err);
+            res.status(500).json({ error: 'Error updating segment weights' });
+        });
+});
+
+// Get weighted grand total for pageant leaderboard
+// Get weighted grand total for pageant leaderboard
+app.get('/pageant-grand-total/:competitionId', (req, res) => {
+    const { competitionId } = req.params;
+    
+    // First, get all segment scores with weights
+    const sql = `
+        SELECT 
+            p.participant_id,
+            p.participant_name,
+            p.contestant_number,
+            p.photo_url,
+            ps.segment_id,
+            ps.segment_name,
+            ps.segment_weight,
+            ps.day_number,
+            ps.order_number,
+            os.judge_id,
+            os.total_score
+        FROM participants p
+        JOIN overall_scores os ON p.participant_id = os.participant_id
+        JOIN pageant_segments ps ON os.segment_id = ps.segment_id
+        WHERE ps.competition_id = ? AND ps.is_active = TRUE
+        ORDER BY p.participant_id, ps.day_number, ps.order_number, os.judge_id
+    `;
+    
+    db.query(sql, [competitionId], (err, result) => {
+        if (err) {
+            console.error('Error fetching grand total:', err);
+            return res.status(500).json({ error: 'Error fetching grand total: ' + err.message });
+        }
+        
+        if (result.length === 0) {
+            return res.json([]);
+        }
+        
+        // Process results in JavaScript
+const participantMap = {};
+
+result.forEach(row => {
+  if (!participantMap[row.participant_id]) {
+    participantMap[row.participant_id] = {
+      participant_id: row.participant_id,
+      participant_name: row.participant_name,
+      contestant_number: row.contestant_number,
+      photo_url: row.photo_url,
+      segments: {},
+      judges: new Set(),
+      segments_completed: new Set()
+    };
+  }
+
+  const participant = participantMap[row.participant_id];
+
+  // Coerce the score safely; keep only finite numbers
+  const val = Number(row.total_score);
+  const isFiniteScore = Number.isFinite(val);
+
+  if (isFiniteScore) {
+    participant.judges.add(row.judge_id);
+    participant.segments_completed.add(row.segment_id);
+  }
+
+  if (!participant.segments[row.segment_id]) {
+    participant.segments[row.segment_id] = {
+      name: row.segment_name,
+      weight: Number(row.segment_weight) || 0,
+      scores: []
+    };
+  }
+
+  if (isFiniteScore) {
+    participant.segments[row.segment_id].scores.push(val);
+  }
+});
+
+// Calculate averages and weighted totals (SAFE)
+const leaderboard = Object.values(participantMap).map(participant => {
+  let weighted_grand_total_num = 0;
+  const segments = [];
+
+  Object.values(participant.segments).forEach(segment => {
+    const valid = segment.scores.filter(Number.isFinite);
+    if (valid.length === 0) {
+      // no valid scores for this segment; contributes 0
+      segments.push({
+        name: segment.name,
+        average_score: '0.00',
+        weight: segment.weight,
+        weighted_contribution: '0.00'
+      });
+      return;
+    }
+
+    const sum = valid.reduce((acc, s) => acc + s, 0);
+    const average_score = sum / valid.length;
+    const weighted_contribution = (average_score * segment.weight) / 100;
+
+    weighted_grand_total_num += weighted_contribution;
+
+    segments.push({
+      name: segment.name,
+      average_score: average_score.toFixed(2),
+      weight: segment.weight,
+      weighted_contribution: weighted_contribution.toFixed(2)
+    });
+  });
+
+  return {
+    participant_id: participant.participant_id,
+    participant_name: participant.participant_name,
+    contestant_number: participant.contestant_number,
+    photo_url: participant.photo_url,
+    segments,
+    weighted_grand_total: weighted_grand_total_num.toFixed(2),
+    segments_completed: participant.segments_completed.size,
+    judge_count: participant.judges.size
+  };
+});
+
+// Sort and respond
+leaderboard.sort((a, b) => parseFloat(b.weighted_grand_total) - parseFloat(a.weighted_grand_total));
+res.json(leaderboard);
+    });
+});
+
+// Get individual participant's weighted score breakdown
+app.get('/participant-weighted-breakdown/:participantId/:competitionId', (req, res) => {
+    const { participantId, competitionId } = req.params;
+    
+    const sql = `
+        SELECT 
+            p.participant_name,
+            p.contestant_number,
+            ps.segment_name,
+            ps.segment_weight,
+            ps.day_number,
+            j.judge_name,
+            os.total_score,
+            (os.total_score * ps.segment_weight / 100) as weighted_contribution
+        FROM overall_scores os
+        JOIN pageant_segments ps ON os.segment_id = ps.segment_id
+        JOIN participants p ON os.participant_id = p.participant_id
+        JOIN judges j ON os.judge_id = j.judge_id
+        WHERE os.participant_id = ? AND ps.competition_id = ?
+        ORDER BY ps.day_number, ps.order_number, j.judge_name
+    `;
+    
+    db.query(sql, [participantId, competitionId], (err, result) => {
+        if (err) {
+            console.error('Error fetching participant breakdown:', err);
+            return res.status(500).json({ error: 'Error fetching breakdown' });
+        }
+        
+        // Group by segment
+        const segmentMap = {};
+        result.forEach(row => {
+            if (!segmentMap[row.segment_name]) {
+                segmentMap[row.segment_name] = {
+                    segment_name: row.segment_name,
+                    segment_weight: row.segment_weight,
+                    day_number: row.day_number,
+                    judge_scores: [],
+                    average_score: 0,
+                    weighted_contribution: 0
+                };
+            }
+            
+            segmentMap[row.segment_name].judge_scores.push({
+                judge_name: row.judge_name,
+                score: row.total_score
+            });
+        });
+        
+        // Calculate averages
+        const segments = Object.values(segmentMap).map(seg => {
+            const sum = seg.judge_scores.reduce((acc, j) => acc + j.score, 0);
+            seg.average_score = (sum / seg.judge_scores.length).toFixed(2);
+            seg.weighted_contribution = (seg.average_score * seg.segment_weight / 100).toFixed(2);
+            return seg;
+        });
+        
+        const grand_total = segments.reduce((sum, seg) => sum + parseFloat(seg.weighted_contribution), 0);
+        
+        res.json({
+            participant_name: result[0]?.participant_name || 'Unknown',
+            contestant_number: result[0]?.contestant_number || 'N/A',
+            segments: segments,
+            weighted_grand_total: grand_total.toFixed(2)
+        });
+    });
+});
+
+
+console.log('✅ Complete scoring system loaded - Pageants & Regular competitions');
+
+app.get('/debug-scores/:judgeId/:competitionId', (req, res) => {
+    const { judgeId, competitionId } = req.params;
+    
+    const queries = {
+        overall_scores: `
+            SELECT * FROM overall_scores 
+            WHERE judge_id = ? AND competition_id = ?
+        `,
+        detailed_scores: `
+            SELECT * FROM detailed_scores 
+            WHERE judge_id = ? AND competition_id = ?
+        `,
+        participants: `
+            SELECT * FROM participants 
+            WHERE competition_id = ?
+        `,
+        competition: `
+            SELECT c.*, et.is_pageant 
+            FROM competitions c 
+            JOIN event_types et ON c.event_type_id = et.event_type_id
+            WHERE c.competition_id = ?
+        `
+    };
+    
+    const results = {};
+    let completed = 0;
+    
+    // Get overall_scores
+    db.query(queries.overall_scores, [judgeId, competitionId], (err, data) => {
+        results.overall_scores = err ? { error: err.message } : data;
+        if (++completed === 4) res.json(results);
+    });
+    
+    // Get detailed_scores
+    db.query(queries.detailed_scores, [judgeId, competitionId], (err, data) => {
+        results.detailed_scores = err ? { error: err.message } : data;
+        if (++completed === 4) res.json(results);
+    });
+    
+    // Get participants
+    db.query(queries.participants, [competitionId], (err, data) => {
+        results.participants = err ? { error: err.message } : data;
+        if (++completed === 4) res.json(results);
+    });
+    
+    // Get competition
+    db.query(queries.competition, [competitionId], (err, data) => {
+        results.competition = err ? { error: err.message } : data;
+        if (++completed === 4) res.json(results);
+    });
+});
+
+
+app.listen(PORT, '0.0.0.0', () => {  // ✅ Use the PORT from line 11
+  console.log(`🚀 Server running on port ${PORT}`);
+});
